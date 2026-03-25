@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import crypto from 'crypto';
+import { REQUEST_WINDOW_SECONDS, isUnlimitedUser } from '../config/limits';
 
 const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), 'kinova.db');
 
@@ -117,30 +118,43 @@ export function upsertUser(telegramId: number, username?: string, firstName?: st
 }
 
 export function incrementUserRequests(telegramId: number): number {
+  if (isUnlimitedUser(telegramId)) return 0;
+
   const d = getDb();
-  // Kun o'zgargan bo'lsa request_count ni 1 ga reset qilish (kunlik limit)
+  // So'nggi so'rovdan 12 soat o'tgan bo'lsa — yangi oyna, count=1
   d.prepare(`
     UPDATE users SET
       request_count = CASE
         WHEN last_request_at IS NULL THEN 1
-        WHEN date(last_request_at, 'unixepoch') < date('now') THEN 1
+        WHEN (unixepoch() - last_request_at) >= ? THEN 1
         ELSE request_count + 1
       END,
       last_request_at = unixepoch()
     WHERE telegram_id = ?
-  `).run(telegramId);
+  `).run(REQUEST_WINDOW_SECONDS, telegramId);
   const row = d.prepare(`SELECT request_count FROM users WHERE telegram_id = ?`).get(telegramId) as { request_count: number } | undefined;
   return row?.request_count ?? 1;
 }
 
-export function getTodayRequestCount(telegramId: number): number {
+/**
+ * Joriy oynadagi ishlatilgan so'rovlar (increment bilan bir xil qoida).
+ * Vaqt: faqat SQLite unixepoch() — Node Date.now() bilan farq bo'lib qolmaydi.
+ */
+export function getWindowRequestCount(telegramId: number): number {
+  if (isUnlimitedUser(telegramId)) return 0;
   const d = getDb();
   const row = d.prepare(`
-    SELECT request_count, last_request_at FROM users WHERE telegram_id = ?
-  `).get(telegramId) as { request_count: number; last_request_at: number | null } | undefined;
-  if (!row || !row.last_request_at) return 0;
+    SELECT CASE
+      WHEN last_request_at IS NULL THEN 0
+      WHEN (unixepoch() - last_request_at) >= ? THEN 0
+      ELSE request_count
+    END AS effective
+    FROM users WHERE telegram_id = ?
+  `).get(REQUEST_WINDOW_SECONDS, telegramId) as { effective: number } | undefined;
+  return row?.effective ?? 0;
+}
 
-  const todayStart = Math.floor(Date.now() / 1000) - (Math.floor(Date.now() / 1000) % 86400);
-  if (row.last_request_at < todayStart) return 0;
-  return row.request_count;
+/** @deprecated getWindowRequestCount ishlating */
+export function getTodayRequestCount(telegramId: number): number {
+  return getWindowRequestCount(telegramId);
 }

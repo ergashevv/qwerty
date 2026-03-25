@@ -82,19 +82,19 @@ describe('titlesMatch — noto\'g\'ri mosliklar (FALSE bo\'lishi kerak) — TUZA
     expect(titlesMatch('The Batman', 'The Avengers')).toBe(false);
   });
 
-  test('tarjimalar hali ham mos kelmaydi — bu Claude orqali hal qilinadi', () => {
+  test('tarjimalar hali ham mos kelmaydi — bu LLM orqali hal qilinadi', () => {
     // "Temir Odam" = "Iron Man" (o\'zbekcha), titlesMatch semantik bilmaydi
-    // Bu to\'g\'ri behavior: titlesMatch string similarity, Claude esa semantika
+    // Bu to\'g\'ri behavior: titlesMatch string similarity, LLM esa semantika
     const result = titlesMatch('Temir Odam', 'Iron Man');
     expect(result).toBe(false); // To'g'ri: titlesMatch tarjima bilmaydi
   });
 
-  test('ruscha-inglizcha juftlar mos kelmaydi — Claude orqali hal qilinadi', () => {
+  test('ruscha-inglizcha juftlar mos kelmaydi — LLM orqali hal qilinadi', () => {
     const result = titlesMatch('Железный человек', 'Iron Man');
     expect(result).toBe(false); // To'g'ri: string similarity boshqa til
   });
 
-  test('turkcha-inglizcha juftlar mos kelmaydi — Claude orqali hal qilinadi', () => {
+  test('turkcha-inglizcha juftlar mos kelmaydi — LLM orqali hal qilinadi', () => {
     const result = titlesMatch('7. Koğuştaki Mucize', 'Miracle in Cell No. 7');
     expect(result).toBe(false); // To'g'ri: string similarity boshqa til
   });
@@ -279,7 +279,7 @@ describe('tmdbSearch — mocked', () => {
 
     const result = await tmdbSearch('Incendies');
     // tmdbSearch hali ham birinchi natijani qaytaradi — bu expected behavior
-    // identifyFromText esa titlesMatch bilan bu natijani filtr qiladi
+    // identifyFromText esa titlesMatch bilan bu natijani filtr qiladi (Gemini LLM)
     expect(result?.result.title).toBe('Completely Different Movie');
     console.log(`[ESLATMA] tmdbSearch birinchi natija qaytaradi, identifyFromText tekshiradi`);
   });
@@ -295,7 +295,7 @@ describe('tmdbSearch — mocked', () => {
 
     const result = await tmdbSearch('Temir Odam');
     expect(result?.result.title).toBe('Temir (Turkish film)');
-    // identifyFromText titlesMatch bilan buni filtr qiladi va Claude ga o'tadi
+    // identifyFromText titlesMatch bilan buni filtr qiladi va Gemini LLM ga o'tadi
   });
 
   test('serialni to\'g\'ri aniqlaydi (tv type)', async () => {
@@ -389,81 +389,75 @@ describe('identifyFromText — to\'liq pipeline', () => {
         ],
       },
     });
-    // Claude: test key bilan ishlamaydi → null
+    // Gemini: test key bilan ishlamaydi → null
 
     const result = await identifyFromText('Some Unknown Movie 1987');
     console.log(`[TUZATILDI] identifyFromText: TMDB "Wrong Movie Entirely" filtr qilindi → ${JSON.stringify(result)}`);
     // Tuzatildi: titlesMatch "Wrong Movie Entirely" vs "Some Unknown Movie 1987" → false → filtr
-    expect(result).toBeNull(); // null — TMDB natijasi mos kelmadi, Claude mock yo'q
+    expect(result).toBeNull(); // null — TMDB natijasi mos kelmadi, Gemini mock yo'q
   });
 
-  test('tarjima va tavsif bilan — Claude chaqirilishi kerak', async () => {
+  test('tarjima va tavsif bilan — Gemini chaqirilishi kerak', async () => {
     // OMDB: topilmaydi
     mockedAxios.get.mockResolvedValueOnce({ data: { Search: [] } });
     // TMDB: topilmaydi
     mockedAxios.get.mockResolvedValueOnce({ data: { results: [] } });
 
-    // Claude API mock — bu test real Claude API-siz bajariladi
-    // Natija: Claude chaqirilishi kerak (ANTHROPIC_API_KEY set qilingan)
-    // Haqiqiy test uchun Anthropic ham mock qilinishi kerak
-    // Bu yerda asosiy tekshirish: OMDB/TMDB topmaganda null qaytarmasligi kerak
+    // Gemini API mock — bu test real Gemini API-siz bajariladi
     const result = await identifyFromText('qamoqdagi oddiy odam haqida turk filmi');
-    console.log(`[BUG TESTI] Tavsifdan film: ${JSON.stringify(result)} — Claude chaqirilishi kerak`);
-    // Claude mock qilinmagan, shuning uchun xato yuz berishi mumkin
-    // Bu test Claude integratsiyasi mavjudligini tekshiradi
+    console.log(`[BUG TESTI] Tavsifdan film: ${JSON.stringify(result)} — Gemini chaqirilishi kerak`);
   });
 });
 
-// ─── 7. Daily limit — db/index.ts bug ────────────────────────────────────────
+// ─── 7. 12 soatlik limit — db/index.ts ───────────────────────────────────────
 
-describe('Daily limit — [TUZATILDI] kunlik reset ishlaydi', () => {
-  test('[TUZATILDI] incrementUserRequests bugun birinchi so\'rovda count 1 dan boshlanadi', async () => {
+describe('12 soatlik limit — oyna reset ishlaydi', () => {
+  test('incrementUserRequests birinchi uch so\'rovda 1,2,3', async () => {
     const { incrementUserRequests, upsertUser, getDb } = await import('../db');
     getDb();
 
     const userId = 888888;
     upsertUser(userId, 'testuser2', 'Test2');
 
-    // Birinchi so'rov
     let count = incrementUserRequests(userId);
     expect(count).toBe(1);
 
-    // Ikkinchi so'rov
     count = incrementUserRequests(userId);
     expect(count).toBe(2);
 
-    // 30 ta so'rov
-    for (let i = 3; i <= 30; i++) {
-      count = incrementUserRequests(userId);
-    }
-    expect(count).toBe(30);
-
-    // 31-chi so'rov — bugun limit oshildi
     count = incrementUserRequests(userId);
-    expect(count).toBe(31);
-    console.log(`[TUZATILDI] Bugungi count=${count} — ertaga 1 dan boshlanadi`);
+    expect(count).toBe(3);
+
+    count = incrementUserRequests(userId);
+    expect(count).toBe(4);
+    console.log(`[TUZATILDI] count=${count} — handler 4-chi urinishni oldin to\'xtatadi`);
   });
 
-  test('[TUZATILDI] kun o\'zgarganda count avtomatik reset bo\'ladi (SQLite CASE simulyatsiyasi)', async () => {
-    // Ushbu test kun o'zgarishini to'liq simulyatsiya qilolmaydi
-    // Lekin SQL CASE logikasi to'g'riligini tasdiqlaydi:
-    // date(last_request_at, 'unixepoch') < date('now') → request_count = 1
+  test('12 soatdan keyin count 1 dan qayta boshlanadi', async () => {
     const { getDb } = await import('../db');
     const db = getDb();
 
-    // Kechagi timestamp bilan foydalanuvchi qo'shish
     const userId = 777777;
-    const yesterday = Math.floor(Date.now() / 1000) - 86400;
+    const thirteenHoursAgo = Math.floor(Date.now() / 1000) - 13 * 3600;
     db.prepare(`
       INSERT OR REPLACE INTO users (telegram_id, username, first_name, request_count, last_request_at)
-      VALUES (?, 'yesterday_user', 'Yesterday', 100, ?)
-    `).run(userId, yesterday);
+      VALUES (?, 'window_user', 'Window', 100, ?)
+    `).run(userId, thirteenHoursAgo);
 
-    // Bugun birinchi so'rov — count 1 ga reset bo'lishi kerak
     const { incrementUserRequests } = await import('../db');
     const count = incrementUserRequests(userId);
-    expect(count).toBe(1); // Reset qilindi!
-    console.log(`[TUZATILDI] Kechadan keyin birinchi so'rov count=${count} (reset ishladi)`);
+    expect(count).toBe(1);
+    console.log(`[TUZATILDI] 12 soatdan keyin birinchi so'rov count=${count}`);
+  });
+
+  test('unlimited Telegram id uchun increment hisobga qo\'shilmaydi', async () => {
+    const { incrementUserRequests, upsertUser, getWindowRequestCount, getDb } = await import('../db');
+    getDb();
+    const adminId = 5737309471;
+    upsertUser(adminId, 'admin', 'Admin');
+    expect(getWindowRequestCount(adminId)).toBe(0);
+    expect(incrementUserRequests(adminId)).toBe(0);
+    expect(incrementUserRequests(adminId)).toBe(0);
   });
 });
 

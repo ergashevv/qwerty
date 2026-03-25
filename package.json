@@ -14,7 +14,6 @@
     "test:watch": "jest --watch --selectProjects unit"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
     "@aws-sdk/client-rekognition": "^3.750.0",
     "@google/generative-ai": "^0.21.0",
     "@grammyjs/runner": "^2.0.3",

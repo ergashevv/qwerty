@@ -1,9 +1,8 @@
 import { Context } from 'grammy';
 import { identifyFromText, getMovieDetails } from '../services/movieService';
-import { getCached, setCache, upsertUser, incrementUserRequests } from '../db';
+import { getCached, setCache, upsertUser, incrementUserRequests, getWindowRequestCount } from '../db';
 import { sendMovieResult } from './photo';
-
-const DAILY_LIMIT = 30;
+import { USER_REQUEST_LIMIT, isUnlimitedUser } from '../config/limits';
 
 export async function handleText(ctx: Context): Promise<void> {
   const text = ctx.message?.text?.trim();
@@ -13,11 +12,16 @@ export async function handleText(ctx: Context): Promise<void> {
   if (!userId) return;
 
   upsertUser(userId, ctx.from?.username, ctx.from?.first_name);
-  const count = incrementUserRequests(userId);
 
-  if (count > DAILY_LIMIT) {
-    await ctx.reply(`⚠️ Kunlik limitga yetdingiz (${DAILY_LIMIT} ta so'rov).`);
-    return;
+  if (!isUnlimitedUser(userId)) {
+    if (getWindowRequestCount(userId) >= USER_REQUEST_LIMIT) {
+      await ctx.reply(
+        `⚠️ So'rov limiti tugadi (${USER_REQUEST_LIMIT} ta / 12 soat).\n` +
+          '⏳ 12 soatdan keyin yana 3 ta ochiladi.'
+      );
+      return;
+    }
+    incrementUserRequests(userId);
   }
 
   const processing = await ctx.reply('🔍 Qidirilmoqda...');

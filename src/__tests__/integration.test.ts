@@ -7,7 +7,6 @@
  *   - TMDB
  *   - AWS Rekognition (yuz tanish)
  *   - Google Vision (rasm qidirish)
- *   - Claude (film aniqlash)
  *   - Gemini (film aniqlash)
  *   - To'liq identifyMovie pipeline
  *
@@ -303,82 +302,7 @@ describe('Google Vision — rasm orqali film qidirish', () => {
   });
 });
 
-// ─── 5. CLAUDE API ───────────────────────────────────────────────────────────
-
-describe('Claude API — rasm orqali film aniqlash', () => {
-  const claudeKey = process.env.ANTHROPIC_API_KEY;
-
-  test('Claude API kalit mavjud', () => {
-    expect(claudeKey).toBeTruthy();
-    console.log(`Claude key: ${claudeKey?.slice(0, 20)}****`);
-  });
-
-  test('Iron Man posteri dan film aniqlanishi kerak', async () => {
-    console.log('Iron Man poster Claude uchun yuklanmoqda...');
-    const base64 = await downloadImageAsBase64(TEST_IMAGES.ironManPoster);
-
-    const Anthropic = (await import('@anthropic-ai/sdk')).default;
-    const anthropic = new Anthropic({ apiKey: claudeKey });
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 300,
-      messages: [{
-        role: 'user',
-        content: [
-          {
-            type: 'image',
-            source: { type: 'base64', media_type: 'image/jpeg', data: base64 },
-          },
-          {
-            type: 'text',
-            text: 'What movie/TV show is this? Respond ONLY with JSON: {"title": "exact title", "type": "movie" or "tv", "confidence": "high/medium/low"}',
-          },
-        ],
-      }],
-    });
-
-    const text = (response.content[0] as { text?: string }).text || '';
-    const m = text.match(/\{[\s\S]*?\}/);
-    const parsed = m ? JSON.parse(m[0]) : null;
-
-    console.log(`Claude raw: ${text.slice(0, 200)}`);
-    console.log(`Claude parsed: ${JSON.stringify(parsed)}`);
-
-    if (parsed?.title?.toLowerCase().includes('iron man')) {
-      console.log(`✅ Claude Iron Man ni aniqladi: "${parsed.title}" (${parsed.confidence})`);
-    } else {
-      console.log(`❌ Claude to'g'ri aniqlamadi: "${parsed?.title}" (kerak: Iron Man)`);
-    }
-
-    expect(parsed?.title).toBeTruthy();
-  });
-
-  test('Matn orqali: "qamoqdagi ota haqida turk filmi" — Claude tanisin', async () => {
-    const Anthropic = (await import('@anthropic-ai/sdk')).default;
-    const anthropic = new Anthropic({ apiKey: claudeKey });
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 200,
-      messages: [{
-        role: 'user',
-        content: `Identify the EXACT movie from this description (may be in Uzbek, Russian, Turkish, or English):
-"qamoqdagi ota haqida turk filmi, kichik qiz bilan"
-
-Respond ONLY with JSON: {"title": "exact title", "type": "movie" or "tv", "confidence": "high/medium/low"}`,
-      }],
-    });
-
-    const text = (response.content[0] as { text?: string }).text || '';
-    const m = text.match(/\{[\s\S]*?\}/);
-    const parsed = m ? JSON.parse(m[0]) : null;
-    console.log(`Claude tavsifdan: ${JSON.stringify(parsed)}`);
-    // Kutilgan: "Miracle in Cell No. 7" yoki "7. Koğuştaki Mucize"
-    expect(parsed?.title).toBeTruthy();
-    expect(parsed?.confidence).not.toBe('low');
-  });
-});
-
-// ─── 6. GEMINI API ───────────────────────────────────────────────────────────
+// ─── 5. GEMINI API ───────────────────────────────────────────────────────────
 
 describe('Gemini API — rasm orqali film aniqlash', () => {
   const geminiKey = process.env.GEMINI_API_KEY;
@@ -417,7 +341,7 @@ describe('Gemini API — rasm orqali film aniqlash', () => {
   });
 });
 
-// ─── 7. TO'LIQ PIPELINE: identifyMovie ───────────────────────────────────────
+// ─── 6. TO'LIQ PIPELINE: identifyMovie ───────────────────────────────────────
 
 describe('To\'liq pipeline: identifyMovie — haqiqiy rasm bilan', () => {
   test('Iron Man posteri → identifyMovie → "Iron Man" topilishi kerak', async () => {
@@ -463,7 +387,7 @@ describe('To\'liq pipeline: identifyMovie — haqiqiy rasm bilan', () => {
   });
 });
 
-// ─── 7b. VISION WATERMARK VA SKIP TEKSHIRUVI ─────────────────────────────────
+// ─── 6b. VISION WATERMARK VA SKIP TEKSHIRUVI ─────────────────────────────────
 
 describe('Vision — watermark va noise filtering', () => {
   test('Brad Pitt rasmi bilan Vision → watermark confused natija rad etilishi kerak', async () => {
@@ -514,7 +438,7 @@ describe('Vision — watermark va noise filtering', () => {
   });
 });
 
-// ─── 8. SERPER API ───────────────────────────────────────────────────────────
+// ─── 7. SERPER API ───────────────────────────────────────────────────────────
 
 describe('Serper API — tomosha havolalari qidirish', () => {
   const serperKey = process.env.SERPER_API_KEY;

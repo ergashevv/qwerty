@@ -1,4 +1,3 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import axios from 'axios';
 import sharpLib from 'sharp';
@@ -35,8 +34,9 @@ const OMDB_KEY   = process.env.OMDB_API_KEY   || '';
 const SERPER_KEY = process.env.SERPER_API_KEY  || '';
 const VISION_KEY = process.env.VISION_API_KEY  || '';
 const IMGBB_KEY  = process.env.IMGBB_API_KEY   || '';
-const CLAUDE_KEY = process.env.ANTHROPIC_API_KEY || '';
 const GEMINI_KEY = process.env.GEMINI_API_KEY  || '';
+/** Faqat Gemini (multimodal + matn + tarjima). */
+const GEMINI_MODEL = 'gemini-2.5-flash';
 const TIMEOUT    = 8000;
 
 // ─── YORDAMCHI ───────────────────────────────────────────────────────────────
@@ -92,9 +92,26 @@ interface TmdbResult {
   original_title?: string; original_name?: string;
   release_date?: string; first_air_date?: string;
   vote_average?: number; vote_count?: number;
+  /** TMDB "trend" — mashhur aktyorlar uchun reytingdan ko'ra yaxshi taroziladi */
+  popularity?: number;
   poster_path?: string | null;
   overview?: string; media_type?: string;
 }
+
+/** Aktyor filmografiyasida va yuz-kesishuv nomzodlarida saralash */
+function sortTmdbByRelevance(a: TmdbResult, b: TmdbResult): number {
+  const pa = a.popularity ?? 0;
+  const pb = b.popularity ?? 0;
+  if (Math.abs(pa - pb) > 1e-6) return pb - pa;
+  const va = (b.vote_average ?? 0) - (a.vote_average ?? 0);
+  if (Math.abs(va) > 1e-6) return va;
+  return (b.vote_count ?? 0) - (a.vote_count ?? 0);
+}
+
+/** Yuz → TMDB: kesishuvdan keyin Gemini tanlaydigan nomzodlar soni (oldingi 5 — juda tor) */
+const FACE_CANDIDATE_LIMIT = 20;
+/** Bitta aktyor uchun TMDB dan olinadigan maksimal film (30 — pastda qolgan mashhur dramalar) */
+const PERSON_CREDITS_MAX = 60;
 
 export async function tmdbSearch(query: string, type: MediaType | 'multi' = 'multi'): Promise<{ result: TmdbResult; type: MediaType } | null> {
   try {
@@ -147,8 +164,8 @@ async function tmdbPersonMovies(personName: string): Promise<TmdbResult[]> {
         // Kamida 100 ta ovoz — bu obscure/behind-the-scenes kontentni filtrlab tashlaydi
         (m.vote_count ?? 0) >= 100
       )
-      .sort((a, b) => (b.vote_average ?? 0) - (a.vote_average ?? 0))
-      .slice(0, 30);
+      .sort(sortTmdbByRelevance)
+      .slice(0, PERSON_CREDITS_MAX);
   } catch { return []; }
 }
 
@@ -336,7 +353,7 @@ async function identifyByFaces(base64: string): Promise<MovieIdentified | null> 
     if (intersection.length > 0) candidates = intersection;
   }
 
-  candidates = candidates.sort((a, b) => (b.vote_average || 0) - (a.vote_average || 0)).slice(0, 5);
+  candidates = candidates.sort(sortTmdbByRelevance).slice(0, FACE_CANDIDATE_LIMIT);
   console.log('🎬 Candidates:', candidates.map(c => c.title || c.name).join(', '));
 
   // Bitta qolsa — aniq
@@ -347,146 +364,58 @@ async function identifyByFaces(base64: string): Promise<MovieIdentified | null> 
     return { title, type, confidence: 'high' };
   }
 
-  // Claude bilan toraytirish
-  if (candidates.length > 1 && CLAUDE_KEY) {
+  // Ko'p nomzod: Gemini tanlaydi; topilmasa — TMDB reytingi bo'yicha fallback
+  if (candidates.length > 1 && GEMINI_KEY) {
     const names = celebrities.map(c => c.name).join(', ');
     const titles = candidates.map(c => c.title || c.name).join(' | ');
-    const pick = await claudePickFromCandidates(base64, names, titles);
-    if (pick) return pick;
-    // Fallback: eng mashhurini qaytaramiz
-    const best = candidates[0];
-    return { title: best.title || best.name || '', type: best.media_type === 'tv' ? 'tv' : 'movie', confidence: 'medium' };
+    const pickG = await geminiPickFromCandidates(base64, names, titles);
+    if (pickG) return pickG;
+  }
+  if (candidates.length > 1) {
+    const best = [...candidates].sort((a, b) => (b.vote_average ?? 0) - (a.vote_average ?? 0))[0];
+    return {
+      title: best.title || best.name || '',
+      type: best.media_type === 'tv' ? 'tv' : 'movie',
+      confidence: 'medium',
+    };
   }
 
   return null;
 }
 
-async function claudePickFromCandidates(base64: string, actors: string, candidates: string): Promise<MovieIdentified | null> {
+async function geminiPickFromCandidates(base64: string, actors: string, candidates: string): Promise<MovieIdentified | null> {
+  if (!GEMINI_KEY) return null;
   try {
-    const anthropic = new Anthropic({ apiKey: CLAUDE_KEY });
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 300,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
-          {
-            type: 'text',
-            text: `Recognized actors: ${actors}
-Candidate movies/shows: ${candidates}
+    const genAI = new GoogleGenerativeAI(GEMINI_KEY);
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+    const result = await model.generateContent([
+      { inlineData: { data: base64, mimeType: 'image/jpeg' } },
+      {
+        text: `Recognized actors: ${actors}
+Candidate movies/shows (pick exactly ONE from this list): ${candidates}
 
-Look at the screenshot carefully. Based on the scene details (costumes, setting, lighting, props), which ONE of the candidates does this screenshot belong to? Also identify which part/sequel if applicable.
+Look at the screenshot carefully. Based on the scene details (costumes, setting, lighting, props, visible text in the film frame), which ONE of the candidates does this screenshot belong to? Also identify which part/sequel if applicable.
+
+If none of the candidates fit the scene, respond with: {"title": "", "type": "movie", "confidence": "low"}
 
 Respond ONLY with JSON:
-{"title": "Exact title from candidates", "type": "movie" or "tv", "confidence": "high/medium/low"}`
-          }
-        ]
-      }]
-    });
-    const text = (response.content[0] as { text?: string }).text || '';
+{"title": "Exact title from candidates", "type": "movie" or "tv", "confidence": "high/medium/low"}`,
+      },
+    ]);
+    const text = result.response.text();
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return null;
     const parsed = JSON.parse(m[0]) as { title?: string; type?: string; confidence?: string };
-    if (!parsed.title) return null;
+    const t = (parsed.title || '').trim();
+    if (!t) return null;
+    const conf = (parsed.confidence || '').toLowerCase();
+    if (conf === 'low') return null;
     return {
-      title: parsed.title,
+      title: t,
       type: parsed.type === 'tv' ? 'tv' : 'movie',
       confidence: parsed.confidence,
     };
   } catch { return null; }
-}
-
-// ─── CLAUDE CHAIN-OF-THOUGHT ─────────────────────────────────────────────────
-
-async function identifyByClaude(base64: string, mimeType: string): Promise<MovieIdentified | null> {
-  if (!CLAUDE_KEY) return null;
-  try {
-    const anthropic = new Anthropic({ apiKey: CLAUDE_KEY });
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 600,
-      messages: [{
-        role: 'user',
-        content: [
-          {
-            type: 'image',
-            source: { type: 'base64', media_type: mimeType as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif', data: base64 }
-          },
-          {
-            type: 'text',
-            text: `You are a world-class movie/TV identifier with deep knowledge of ALL world cinema: Hollywood, Turkish (Yeşilçam & modern), Korean, Russian/Soviet, Uzbek, Indian (Bollywood), and CIS films.
-
-Analyze this screenshot carefully in 4 steps:
-
-STEP 1 — FACES & ACTORS:
-- Describe each visible person: age, ethnicity, physical features (hair, beard, build, skin tone)
-- Turkish cinema: Do you recognize actors like Aras Bulut İynemli, Erdal Beşikçioğlu, Mehmet Yılmaz Ak, Nuri Alço, Murat Yıldırım, Sıla Türkoğlu?
-- Korean cinema: Do you recognize actors like Song Joong-ki, Lee Min-ho, Park Seo-joon?
-- If you recognize anyone: their name and which specific movies they're famous for
-
-STEP 2 — VISIBLE TEXT (read everything):
-- Subtitles, watermarks, channel logos, player UI, title cards, street signs
-- IGNORE social media UI (Instagram/TikTok/Telegram interface around the video)
-- Any text on screen is a strong clue — read it carefully
-
-STEP 3 — VISUAL DETAILS:
-- Costumes: prison uniform, period Ottoman/Turkish clothes, military uniform, modern clothes, superhero suit
-- Setting: prison cell, village, Istanbul/Ankara, rural Turkey, historical period, fantasy
-- Color grading, film quality, production value
-- Emotional tone of the scene
-
-STEP 4 — CONCLUSION:
-- The SPECIFIC movie/show title (not just a franchise name)
-- Include part/season number if identifiable
-- For Turkish films, common examples: "7. Koğuştaki Mucize", "Çukur", "Diriliş: Ertuğrul", "Kurtlar Vadisi", "Ezel", "Kara Para Aşk"
-- For prison scenes with a simple/innocent man and a beard: think "7. Koğuştaki Mucize" (Miracle in Cell No. 7)
-
-ACCURACY RULE (mandatory):
-- If the frame is too blurry, too dark, mostly watermark/UI, not clearly a film/TV scene, OR you are not sure which ONE specific title it is, set "confidence" to "low" and "title" to "unknown".
-- Never guess a title just to output something.
-
-Respond ONLY with JSON:
-{
-  "title": "Exact title (use most common international title)",
-  "type": "movie" or "tv",
-  "confidence": "high/medium/low",
-  "partNumber": null or 1/2/3,
-  "country": "Turkey/Korea/USA/etc",
-  "reasoning": "Actor X looks like... + costume/setting details = this specific movie"
-}`
-          }
-        ]
-      }]
-    });
-
-    const text = (response.content[0] as { text?: string }).text || '';
-    console.log('Claude:', text.slice(0, 300));
-    const m = text.match(/\{[\s\S]*?\}/);
-    if (!m) return null;
-    const parsed = JSON.parse(m[0]) as {
-      title?: string; type?: string; confidence?: string; partNumber?: number | null; reasoning?: string;
-    };
-    if (!parsed.title || parsed.title.toLowerCase() === 'unknown') return null;
-    const claudeConf = (parsed.confidence || '').toLowerCase();
-    if (claudeConf !== 'high' && claudeConf !== 'medium') return null;
-
-    let title = parsed.title.trim();
-    if (parsed.partNumber && parsed.partNumber > 1 && !title.match(/\d$/)) {
-      title = `${title} ${parsed.partNumber}`;
-    }
-
-    const verified = await omdbSearch(title);
-    if (verified) return { title: verified.title, type: verified.type, confidence: parsed.confidence };
-
-    const tmdb = await tmdbSearch(title);
-    if (tmdb) return { title: tmdb.result.title || tmdb.result.name || title, type: tmdb.type, confidence: parsed.confidence };
-
-    return { title, type: parsed.type === 'tv' ? 'tv' : 'movie', confidence: parsed.confidence };
-  } catch (e) {
-    console.warn('Claude xato:', (e as Error).message?.slice(0, 80));
-    return null;
-  }
 }
 
 // ─── GEMINI CROSS-CHECK ───────────────────────────────────────────────────────
@@ -495,7 +424,7 @@ async function identifyByGemini(base64: string): Promise<MovieIdentified | null>
   if (!GEMINI_KEY) return null;
   try {
     const genAI = new GoogleGenerativeAI(GEMINI_KEY);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
     const result = await model.generateContent([
       {
         inlineData: { data: base64, mimeType: 'image/jpeg' }
@@ -565,26 +494,18 @@ async function cropFrame(base64: string): Promise<string> {
   } catch { return base64; }
 }
 
-// ─── VISION NATIJASINI CLAUDE BILAN TASDIQLASH ───────────────────────────────
+// ─── GEMINI BILAN TASDIQLASH ─────────────────────────────────────────────────
 
 /** Faqat aniq "match": true bo'lsa true — taxminni rad etish uchun "fail-closed". */
-async function claudeVerify(base64: string, candidateTitle: string, mimeType: string): Promise<boolean> {
-  if (!CLAUDE_KEY) return false;
+async function geminiVerify(base64: string, candidateTitle: string, mimeType: string): Promise<boolean> {
+  if (!GEMINI_KEY) return false;
   try {
-    const anthropic = new Anthropic({ apiKey: CLAUDE_KEY });
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 200,
-      messages: [{
-        role: 'user',
-        content: [
-          {
-            type: 'image',
-            source: { type: 'base64', media_type: mimeType as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif', data: base64 }
-          },
-          {
-            type: 'text',
-            text: `Does this screenshot clearly belong to the movie/TV show "${candidateTitle}"?
+    const genAI = new GoogleGenerativeAI(GEMINI_KEY);
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+    const result = await model.generateContent([
+      { inlineData: { data: base64, mimeType: mimeType } },
+      {
+        text: `Does this screenshot clearly belong to the movie/TV show "${candidateTitle}"?
 
 CRITICAL RULES:
 1. IGNORE watermarks and overlaid text (TASAVVUR, CINEMASCENEUZ, channel logos, player UI, timestamps)
@@ -594,17 +515,15 @@ CRITICAL RULES:
 5. Answer true ONLY if you are confident this frame is from "${candidateTitle}" — not from a similar title, sequel, or different film with the same actor
 6. Answer false if: image quality is too poor, scene could plausibly be from several different films, wrong medium (e.g. cartoon vs live-action), or you have meaningful doubt
 
-Answer ONLY with JSON: {"match": true} or {"match": false, "reason": "brief explanation"}`
-          }
-        ]
-      }]
-    });
-    const text = (response.content[0] as { text?: string }).text || '';
+Answer ONLY with JSON: {"match": true} or {"match": false, "reason": "brief explanation"}`,
+      },
+    ]);
+    const text = result.response.text();
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return false;
     const parsed = JSON.parse(m[0]) as { match?: boolean; reason?: string };
     const ok = parsed.match === true;
-    console.log(`🔍 Claude verify "${candidateTitle}": ${ok} — ${parsed.reason || ''}`);
+    console.log(`🔍 Gemini verify "${candidateTitle}": ${ok} — ${parsed.reason || ''}`);
     return ok;
   } catch {
     return false;
@@ -620,30 +539,34 @@ function pushDistinct(candidates: MovieIdentified[], m: MovieIdentified | null |
 }
 
 /**
- * Rasm bo'yicha film: har bir natija Claude tasdiqidan o'tishi kerak.
- * ANTHROPIC_API_KEY bo'lmasa rasm bo'yicha null (noto'g'ri taxmin bermaslik).
+ * Rasm bo'yicha film: faqat Gemini (multimodal) + Vision / Rekognition / tasdiq.
+ * GEMINI_API_KEY majburiy.
  */
 export async function identifyMovie(base64: string, mimeType: string): Promise<MovieIdentified | null> {
   const withTimeout = <T>(p: Promise<T>, ms = 10000): Promise<T | null> =>
     Promise.race([p, new Promise<null>(res => setTimeout(() => res(null), ms))]).catch(() => null);
 
-  if (!CLAUDE_KEY) {
-    console.warn('identifyMovie: ANTHROPIC_API_KEY yo\'q — rasm bo\'yicha aniqlash o\'chirilgan (aniqlik talabi)');
+  if (!GEMINI_KEY) {
+    console.warn('identifyMovie: GEMINI_API_KEY yo\'q — rasm bo\'yicha aniqlash o\'chirilgan');
     return null;
   }
 
   const croppedBase64 = await cropFrame(base64);
+  const cropMime = 'image/jpeg';
 
-  const [faces, vision, gemini, claude] = await Promise.all([
+  const [faces, vision, gemini] = await Promise.all([
     withTimeout(identifyByFaces(croppedBase64)),
     withTimeout(identifyByVision(croppedBase64)),
     withTimeout(identifyByGemini(croppedBase64)),
-    withTimeout(identifyByClaude(croppedBase64, mimeType)),
   ]);
 
-  console.log(`Pass1 — Faces: ${faces?.title || '-'}, Vision: ${vision?.title || '-'}, Gemini: ${gemini?.title || '-'}, Claude: ${claude?.title || '-'}`);
+  console.log(`Pass1 — Faces: ${faces?.title || '-'}, Vision: ${vision?.title || '-'}, Gemini: ${gemini?.title || '-'}`);
 
   const ordered: MovieIdentified[] = [];
+
+  if (gemini && gemini.confidence !== 'low') {
+    pushDistinct(ordered, gemini);
+  }
 
   const pass1 = [faces, vision, gemini].filter(Boolean) as MovieIdentified[];
   for (let i = 0; i < pass1.length; i++) {
@@ -653,10 +576,6 @@ export async function identifyMovie(base64: string, mimeType: string): Promise<M
         break;
       }
     }
-  }
-
-  if (claude && (claude.confidence === 'high' || claude.confidence === 'medium')) {
-    pushDistinct(ordered, claude);
   }
 
   if (faces?.confidence === 'high') {
@@ -677,9 +596,6 @@ export async function identifyMovie(base64: string, mimeType: string): Promise<M
 
   if (ordered.length === 0) {
     pushDistinct(ordered, faces);
-    if (claude && claude.confidence !== 'low') {
-      pushDistinct(ordered, claude);
-    }
     pushDistinct(ordered, vision);
     if (gemini && gemini.confidence !== 'low') {
       pushDistinct(ordered, gemini);
@@ -689,14 +605,14 @@ export async function identifyMovie(base64: string, mimeType: string): Promise<M
   const MAX_VERIFY = 8;
   for (let i = 0; i < Math.min(ordered.length, MAX_VERIFY); i++) {
     const cand = ordered[i];
-    const ok = await withTimeout(claudeVerify(croppedBase64, cand.title, mimeType));
-    if (ok === true) {
+    const ok = (await withTimeout(geminiVerify(croppedBase64, cand.title, cropMime))) === true;
+    if (ok) {
       console.log('✅ Tasdiqlangan:', cand.title);
       return cand;
     }
   }
 
-  console.log('⚠️ Hech bir nomzod Claude tasdiqidan o\'tmadi');
+  console.log('⚠️ Hech bir nomzod Gemini tasdiqidan o\'tmadi');
   return null;
 }
 
@@ -719,19 +635,10 @@ export async function identifyFromText(query: string): Promise<MovieIdentified |
     if (titlesMatch(query, tmdbTitle) || voteCount >= 500) {
       return { title: tmdbTitle, type: tmdb.type };
     }
-    // TMDb natijasi so'rov bilan mos kelmadi va mashxur emas — Claude ga o'tamiz
+    // TMDb natijasi so'rov bilan mos kelmadi va mashxur emas — Gemini LLM
   }
 
-  // Claude — tarjima, tavsif, boshqa tildan aniqlash
-  if (CLAUDE_KEY) {
-    const anthropic = new Anthropic({ apiKey: CLAUDE_KEY });
-    try {
-      const response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 400,
-        messages: [{
-          role: 'user',
-          content: `Identify the EXACT movie or TV show from this query (may be in Uzbek, Russian, Turkish, or English title/description):
+  const llmPrompt = `Identify the EXACT movie or TV show from this query (may be in Uzbek, Russian, Turkish, or English title/description):
 "${query}"
 
 Rules:
@@ -740,32 +647,39 @@ Rules:
 - Only respond if confidence is medium or high
 
 Respond ONLY with JSON:
-{"title": "Exact original title", "type": "movie" or "tv", "confidence": "high/medium/low"}`
-        }]
-      });
-      const text = (response.content[0] as { text?: string }).text || '';
-      const m = text.match(/\{[\s\S]*?\}/);
-      if (m) {
-        const p = JSON.parse(m[0]) as { title?: string; type?: string; confidence?: string };
-        if (p.title && p.title.toLowerCase() !== 'unknown' && p.confidence !== 'low') {
-          // Claude natijasini OMDB/TMDB bilan tasdiqlash
-          const verified = await omdbSearch(p.title);
-          if (verified) return { title: verified.title, type: verified.type };
-          const tmdbVerified = await tmdbSearch(p.title);
-          if (tmdbVerified?.result) {
-            return {
-              title: tmdbVerified.result.title || tmdbVerified.result.name || p.title,
-              type: tmdbVerified.type,
-            };
-          }
-          // Claude topdi lekin OMDB/TMDB da yo'q — baribir qaytaramiz (low-profile film)
-          if (p.confidence === 'high') {
-            return { title: p.title, type: p.type === 'tv' ? 'tv' : 'movie' };
-          }
-        }
-      }
-    } catch { /* ignore */ }
+{"title": "Exact original title", "type": "movie" or "tv", "confidence": "high/medium/low"}`;
+
+  async function resolveLlmMovie(p: { title?: string; type?: string; confidence?: string }): Promise<MovieIdentified | null> {
+    if (!p.title || p.title.toLowerCase() === 'unknown' || p.confidence === 'low') return null;
+    const verified = await omdbSearch(p.title);
+    if (verified) return { title: verified.title, type: verified.type };
+    const tmdbVerified = await tmdbSearch(p.title);
+    if (tmdbVerified?.result) {
+      return {
+        title: tmdbVerified.result.title || tmdbVerified.result.name || p.title,
+        type: tmdbVerified.type,
+      };
+    }
+    if (p.confidence === 'high') {
+      return { title: p.title, type: p.type === 'tv' ? 'tv' : 'movie' };
+    }
+    return null;
   }
+
+  if (!GEMINI_KEY) return null;
+
+  try {
+    const genAI = new GoogleGenerativeAI(GEMINI_KEY);
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+    const result = await model.generateContent(llmPrompt);
+    const text = result.response.text();
+    const m = text.match(/\{[\s\S]*?\}/);
+    if (m) {
+      const p = JSON.parse(m[0]) as { title?: string; type?: string; confidence?: string };
+      const resolved = await resolveLlmMovie(p);
+      if (resolved) return resolved;
+    }
+  } catch { /* ignore */ }
 
   return null;
 }
@@ -773,31 +687,27 @@ Respond ONLY with JSON:
 // ─── FILM MA'LUMOTLARI VA WATCH LINKS ────────────────────────────────────────
 
 async function translateToUzbek(text: string): Promise<string> {
-  if (!CLAUDE_KEY || !text) return text;
+  if (!text) return text;
+  if (!GEMINI_KEY) return text;
   try {
-    const anthropic = new Anthropic({ apiKey: CLAUDE_KEY });
-    const r = await anthropic.messages.create({
-      model: 'claude-3-haiku-20240307',
-      max_tokens: 600,
-      messages: [{ role: 'user', content: `Translate this movie plot to Uzbek (lotin yozuvida). Only output the translation:\n"${text}"` }]
-    });
-    return (r.content[0] as { text?: string }).text?.trim() || text;
+    const genAI = new GoogleGenerativeAI(GEMINI_KEY);
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+    const r = await model.generateContent(
+      `Translate this movie plot to Uzbek (lotin yozuvida). Only output the translation:\n"${text}"`
+    );
+    return r.response.text()?.trim() || text;
   } catch { return text; }
 }
 
 async function translateTitle(englishTitle: string): Promise<string> {
-  if (!CLAUDE_KEY) return englishTitle;
+  if (!GEMINI_KEY) return englishTitle;
   try {
-    const anthropic = new Anthropic({ apiKey: CLAUDE_KEY });
-    const r = await anthropic.messages.create({
-      model: 'claude-3-haiku-20240307',
-      max_tokens: 100,
-      messages: [{
-        role: 'user',
-        content: `Translate ONLY the movie/TV show title "${englishTitle}" to Uzbek (official localization used in Uzbek dubbing). If no official Uzbek title exists, transliterate or keep original. Output ONLY the title, nothing else.`
-      }]
-    });
-    const result = (r.content[0] as { text?: string }).text?.trim() || englishTitle;
+    const genAI = new GoogleGenerativeAI(GEMINI_KEY);
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+    const r = await model.generateContent(
+      `Translate ONLY the movie/TV show title "${englishTitle}" to Uzbek (official localization used in Uzbek dubbing). If no official Uzbek title exists, transliterate or keep original. Output ONLY the title, nothing else.`
+    );
+    const result = r.response.text()?.trim() || englishTitle;
     return result.toLowerCase() === englishTitle.toLowerCase() ? englishTitle : result;
   } catch { return englishTitle; }
 }

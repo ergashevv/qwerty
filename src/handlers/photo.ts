@@ -1,9 +1,8 @@
 import { Context } from 'grammy';
 import axios from 'axios';
 import { identifyMovie, getMovieDetails, MovieDetails } from '../services/movieService';
-import { getCached, setCache, upsertUser, incrementUserRequests } from '../db';
-
-const DAILY_LIMIT = 30;
+import { getCached, setCache, upsertUser, incrementUserRequests, getWindowRequestCount } from '../db';
+import { USER_REQUEST_LIMIT, isUnlimitedUser } from '../config/limits';
 
 export async function handlePhoto(ctx: Context): Promise<void> {
   const userId  = ctx.from?.id;
@@ -13,13 +12,16 @@ export async function handlePhoto(ctx: Context): Promise<void> {
   if (!userId) return;
 
   upsertUser(userId, username, firstName);
-  const count = incrementUserRequests(userId);
 
-  if (count > DAILY_LIMIT) {
-    await ctx.reply(
-      `⚠️ Kunlik limitga yetdingiz (${DAILY_LIMIT} ta so'rov). Ertaga qayta urinib ko'ring.`
-    );
-    return;
+  if (!isUnlimitedUser(userId)) {
+    if (getWindowRequestCount(userId) >= USER_REQUEST_LIMIT) {
+      await ctx.reply(
+        `⚠️ So'rov limiti tugadi (${USER_REQUEST_LIMIT} ta / 12 soat).\n` +
+          '⏳ 12 soatdan keyin yana 3 ta ochiladi.'
+      );
+      return;
+    }
+    incrementUserRequests(userId);
   }
 
   const processing = await ctx.reply('🔍 Qidirilmoqda...');
