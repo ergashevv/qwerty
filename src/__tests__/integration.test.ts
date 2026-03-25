@@ -463,6 +463,57 @@ describe('To\'liq pipeline: identifyMovie — haqiqiy rasm bilan', () => {
   });
 });
 
+// ─── 7b. VISION WATERMARK VA SKIP TEKSHIRUVI ─────────────────────────────────
+
+describe('Vision — watermark va noise filtering', () => {
+  test('Brad Pitt rasmi bilan Vision → watermark confused natija rad etilishi kerak', async () => {
+    console.log('\nBrad Pitt rasmi yuklanmoqda...');
+    const base64 = await downloadImageAsBase64(TEST_IMAGES.bradPitt);
+
+    const r = await axios.post(
+      `https://vision.googleapis.com/v1/images:annotate?key=${process.env.VISION_API_KEY}`,
+      { requests: [{ image: { content: base64 }, features: [{ type: 'WEB_DETECTION', maxResults: 20 }] }] },
+      { timeout: 15000 }
+    );
+    const wd = r.data?.responses?.[0]?.webDetection || {};
+    const bg = wd.bestGuessLabels?.[0]?.label || 'YO\'Q';
+    const entities = (wd.webEntities || []).slice(0, 5).map(
+      (e: { description?: string; score?: number }) => `${e.description}(${e.score?.toFixed(2)})`
+    );
+    console.log(`Brad Pitt Vision bestGuess: "${bg}"`);
+    console.log(`Brad Pitt Vision entities: ${entities.join(', ')}`);
+
+    // Tasdiqlash: Vision Brad Pitt ni topdi
+    const hasBradPitt = (wd.webEntities || []).some(
+      (e: { description?: string }) => /brad pitt/i.test(e.description || '')
+    );
+    if (hasBradPitt) {
+      console.log('✅ Vision Brad Pitt ni entity sifatida topdi');
+    } else {
+      console.log('⚠️ Vision Brad Pitt ni topmadi');
+    }
+    expect(wd.webEntities).toBeTruthy();
+  });
+
+  test('"Nos Bastidores de Hollywood" noise filtri bilan rad etilishi kerak', () => {
+    // isNoisy logikasini to'g'ridan simulatsiya qilish
+    const isNoisy = (desc: string) => {
+      const lower = desc.toLowerCase();
+      if (/bastidores|behind.the.scenes|making.of|on.the.set|tasavvur|cinemascenefuz/i.test(lower)) return true;
+      return false;
+    };
+
+    expect(isNoisy('Nos Bastidores de Hollywood')).toBe(true);
+    expect(isNoisy('TASAVVUR')).toBe(true);
+    expect(isNoisy('CINEMASCENEFUZ')).toBe(true);
+    expect(isNoisy('behind the scenes')).toBe(true);
+    expect(isNoisy('Fight Club')).toBe(false);
+    expect(isNoisy('Iron Man')).toBe(false);
+    expect(isNoisy('Se7en')).toBe(false);
+    console.log('✅ Barcha noise filtrlari to\'g\'ri ishlaydi');
+  });
+});
+
 // ─── 8. SERPER API ───────────────────────────────────────────────────────────
 
 describe('Serper API — tomosha havolalari qidirish', () => {

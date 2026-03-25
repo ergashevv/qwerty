@@ -50,7 +50,9 @@ export async function handlePhoto(ctx: Context): Promise<void> {
       await ctx.api.editMessageText(
         ctx.chat!.id,
         processing.message_id,
-        '❌ Filmni aniqlay olmadim.\n\n💬 Film haqida matn yozing (aktyor ismi, syujet yoki nom), men topishga harakat qilaman.'
+        '❌ Bu kadrdan filmni ishonchli aniqlay olmadim.\n\n' +
+          '📸 Yaxshiroq kadr yuboring: yuz va sahna aniq, kam watermark.\n' +
+          '✍️ Yoki filmni qisqacha tasvirlab yozing (nom, aktyor, yil) — matn orqali qidiraman.'
       );
       return;
     }

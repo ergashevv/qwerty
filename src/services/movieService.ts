@@ -182,6 +182,11 @@ async function omdbById(imdbId: string): Promise<{ title: string; type: MediaTyp
       timeout: TIMEOUT,
     });
     if (r.data?.Title && (r.data.Type === 'movie' || r.data.Type === 'series')) {
+      // Sifat tekshiruvi: ovoz yo'q yoki plot yo'q bo'lgan obscure yozuvlarni o'tkazib yuboramiz
+      const votes = parseInt((r.data.imdbVotes || '').replace(/,/g, '') || '0', 10);
+      const hasPlot = r.data.Plot && r.data.Plot !== 'N/A';
+      // Kamida 10 ta ovoz YOKI plot mavjud bo'lishi kerak
+      if (!hasPlot && votes < 10) return null;
       return {
         title: r.data.Title,
         type: r.data.Type === 'series' ? 'tv' : 'movie',
@@ -234,6 +239,12 @@ const VISION_SKIP = new Set([
   'man','woman','actor','actress','entertainment','scene','media','watermark',
   'poster','photo','picture','human','people','face','faces','portrait','crowd',
   'instagram','tiktok','telegram','reels','social media',
+  // Uzbek streaming platform watermarks — rasmni adashtirib yuboradi
+  'tasavvur','cinemascenefuz','kinogo','uzmovi','multfilm','uzkinofilm',
+  'kinolar.uz','ok.ru','rutube','ivi','kinopoisk','uzfilms',
+  // "Behind the scenes" / documentary noise — film sahnalari emas
+  'behind the scenes','making of','nos bastidores','bastidores de hollywood',
+  'on the set','film set','movie set','hollywood history',
 ]);
 
 async function identifyByVision(base64: string): Promise<MovieIdentified | null> {
@@ -271,16 +282,26 @@ async function identifyByVision(base64: string): Promise<MovieIdentified | null>
       }
     }
 
-    // bestGuess
+    // bestGuess — VISION_SKIP ga kirgan so'zlar bo'lsa o'tkazib yuboramiz
     const bg = wd.bestGuessLabels?.[0]?.label || '';
-    if (bg && !VISION_SKIP.has(bg.toLowerCase()) && bg.length > 2) {
+    const bgWords = bg.toLowerCase().split(/\s+/);
+    const bgHasNoise = bgWords.some(w => VISION_SKIP.has(w));
+    if (bg && !bgHasNoise && !VISION_SKIP.has(bg.toLowerCase()) && bg.length > 2) {
       const found = await omdbSearch(bg);
       if (found) return { title: found.title, type: found.type };
     }
 
-    // web entities
+    // web entities — faqat aniq film nomlari; shovqinli yoki watermark so'zlar o'tkaziladi
+    const isNoisy = (desc: string) => {
+      const lower = desc.toLowerCase();
+      // To'liq so'z to'plami tekshiruvi
+      if (VISION_SKIP.has(lower)) return true;
+      // "behind the scenes", "bastidores", watermark nomlari — qisman moslik
+      if (/bastidores|behind.the.scenes|making.of|on.the.set|tasavvur|cinemascenefuz/i.test(lower)) return true;
+      return false;
+    };
     const entities = (wd.webEntities || [])
-      .filter(e => (e.score || 0) > 0.6 && e.description && !VISION_SKIP.has(e.description.toLowerCase()))
+      .filter(e => (e.score || 0) > 0.6 && e.description && !isNoisy(e.description))
       .map(e => e.description!)
       .slice(0, 5);
     for (const entity of entities) {
@@ -421,6 +442,10 @@ STEP 4 — CONCLUSION:
 - For Turkish films, common examples: "7. Koğuştaki Mucize", "Çukur", "Diriliş: Ertuğrul", "Kurtlar Vadisi", "Ezel", "Kara Para Aşk"
 - For prison scenes with a simple/innocent man and a beard: think "7. Koğuştaki Mucize" (Miracle in Cell No. 7)
 
+ACCURACY RULE (mandatory):
+- If the frame is too blurry, too dark, mostly watermark/UI, not clearly a film/TV scene, OR you are not sure which ONE specific title it is, set "confidence" to "low" and "title" to "unknown".
+- Never guess a title just to output something.
+
 Respond ONLY with JSON:
 {
   "title": "Exact title (use most common international title)",
@@ -443,6 +468,8 @@ Respond ONLY with JSON:
       title?: string; type?: string; confidence?: string; partNumber?: number | null; reasoning?: string;
     };
     if (!parsed.title || parsed.title.toLowerCase() === 'unknown') return null;
+    const claudeConf = (parsed.confidence || '').toLowerCase();
+    if (claudeConf !== 'high' && claudeConf !== 'medium') return null;
 
     let title = parsed.title.trim();
     if (parsed.partNumber && parsed.partNumber > 1 && !title.match(/\d$/)) {
@@ -455,8 +482,7 @@ Respond ONLY with JSON:
     const tmdb = await tmdbSearch(title);
     if (tmdb) return { title: tmdb.result.title || tmdb.result.name || title, type: tmdb.type, confidence: parsed.confidence };
 
-    if (parsed.confidence !== 'low') return { title, type: parsed.type === 'tv' ? 'tv' : 'movie', confidence: parsed.confidence };
-    return null;
+    return { title, type: parsed.type === 'tv' ? 'tv' : 'movie', confidence: parsed.confidence };
   } catch (e) {
     console.warn('Claude xato:', (e as Error).message?.slice(0, 80));
     return null;
@@ -490,13 +516,17 @@ For Turkish historical: consider "Diriliş: Ertuğrul", "Kuruluş: Osman".
 For Turkish crime: consider "Çukur", "Ezel", "Kara Para Aşk".
 
 Respond ONLY with JSON:
-{"title": "Exact title", "type": "movie" or "tv", "confidence": "high/medium/low", "reasoning": "brief explanation"}`
+{"title": "Exact title or unknown", "type": "movie" or "tv", "confidence": "high/medium/low", "reasoning": "brief explanation"}
+
+If you are not sure which ONE film this is, use "unknown" for title and "low" for confidence.`
     ]);
     const text = result.response.text();
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return null;
     const parsed = JSON.parse(m[0]) as { title?: string; type?: string; confidence?: string };
     if (!parsed.title || parsed.title.toLowerCase() === 'unknown') return null;
+    const gemConf = (parsed.confidence || '').toLowerCase();
+    if (gemConf !== 'high' && gemConf !== 'medium') return null;
 
     const verified = await omdbSearch(parsed.title);
     if (verified) return { title: verified.title, type: verified.type, confidence: parsed.confidence };
@@ -537,13 +567,14 @@ async function cropFrame(base64: string): Promise<string> {
 
 // ─── VISION NATIJASINI CLAUDE BILAN TASDIQLASH ───────────────────────────────
 
+/** Faqat aniq "match": true bo'lsa true — taxminni rad etish uchun "fail-closed". */
 async function claudeVerify(base64: string, candidateTitle: string, mimeType: string): Promise<boolean> {
-  if (!CLAUDE_KEY) return true; // Claude yo'q bo'lsa ishon
+  if (!CLAUDE_KEY) return false;
   try {
     const anthropic = new Anthropic({ apiKey: CLAUDE_KEY });
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 150,
+      max_tokens: 200,
       messages: [{
         role: 'user',
         content: [
@@ -553,94 +584,119 @@ async function claudeVerify(base64: string, candidateTitle: string, mimeType: st
           },
           {
             type: 'text',
-            text: `Does this screenshot belong to the movie/TV show "${candidateTitle}"?
+            text: `Does this screenshot clearly belong to the movie/TV show "${candidateTitle}"?
 
-Look carefully at the actual film frame (ignore any app/social media UI):
-- Do the actors, costumes, and setting match "${candidateTitle}"?
-- Could this be from a completely different movie?
+CRITICAL RULES:
+1. IGNORE watermarks and overlaid text (TASAVVUR, CINEMASCENEUZ, channel logos, player UI, timestamps)
+2. IGNORE social media interface around the video
+3. Focus on the actual film scene: faces, costumes, setting, lighting, animation vs live-action
+4. If "${candidateTitle}" is a documentary / behind-the-scenes / book about cinema (not a narrative film), answer false
+5. Answer true ONLY if you are confident this frame is from "${candidateTitle}" — not from a similar title, sequel, or different film with the same actor
+6. Answer false if: image quality is too poor, scene could plausibly be from several different films, wrong medium (e.g. cartoon vs live-action), or you have meaningful doubt
 
-Answer ONLY with JSON: {"match": true/false, "reason": "brief explanation"}`
+Answer ONLY with JSON: {"match": true} or {"match": false, "reason": "brief explanation"}`
           }
         ]
       }]
     });
     const text = (response.content[0] as { text?: string }).text || '';
     const m = text.match(/\{[\s\S]*?\}/);
-    if (!m) return true;
+    if (!m) return false;
     const parsed = JSON.parse(m[0]) as { match?: boolean; reason?: string };
-    console.log(`🔍 Claude verify "${candidateTitle}": ${parsed.match} — ${parsed.reason}`);
-    return parsed.match !== false;
-  } catch { return true; }
+    const ok = parsed.match === true;
+    console.log(`🔍 Claude verify "${candidateTitle}": ${ok} — ${parsed.reason || ''}`);
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 // ─── ASOSIY ANIQLASH ─────────────────────────────────────────────────────────
 
+function pushDistinct(candidates: MovieIdentified[], m: MovieIdentified | null | undefined): void {
+  if (!m?.title) return;
+  if (candidates.some(c => titlesMatch(c.title, m.title))) return;
+  candidates.push(m);
+}
+
+/**
+ * Rasm bo'yicha film: har bir natija Claude tasdiqidan o'tishi kerak.
+ * ANTHROPIC_API_KEY bo'lmasa rasm bo'yicha null (noto'g'ri taxmin bermaslik).
+ */
 export async function identifyMovie(base64: string, mimeType: string): Promise<MovieIdentified | null> {
   const withTimeout = <T>(p: Promise<T>, ms = 10000): Promise<T | null> =>
     Promise.race([p, new Promise<null>(res => setTimeout(() => res(null), ms))]).catch(() => null);
 
-  // Cropped version (watermark/UI olib tashlangan)
+  if (!CLAUDE_KEY) {
+    console.warn('identifyMovie: ANTHROPIC_API_KEY yo\'q — rasm bo\'yicha aniqlash o\'chirilgan (aniqlik talabi)');
+    return null;
+  }
+
   const croppedBase64 = await cropFrame(base64);
 
-  // PASS 1: Parallel — Rekognition (yuz) + Vision (reverse) + Gemini
-  const [faces, vision, gemini] = await Promise.all([
+  const [faces, vision, gemini, claude] = await Promise.all([
     withTimeout(identifyByFaces(croppedBase64)),
     withTimeout(identifyByVision(croppedBase64)),
     withTimeout(identifyByGemini(croppedBase64)),
+    withTimeout(identifyByClaude(croppedBase64, mimeType)),
   ]);
 
-  console.log(`Pass1 — Faces: ${faces?.title || '-'}, Vision: ${vision?.title || '-'}, Gemini: ${gemini?.title || '-'}`);
+  console.log(`Pass1 — Faces: ${faces?.title || '-'}, Vision: ${vision?.title || '-'}, Gemini: ${gemini?.title || '-'}, Claude: ${claude?.title || '-'}`);
 
-  // Ikkitasi yoki undan ko'pi bir xil javob bersa — aniq (tasdiqlashsiz)
-  const results = [faces, vision, gemini].filter(Boolean) as MovieIdentified[];
-  for (let i = 0; i < results.length; i++) {
-    for (let j = i + 1; j < results.length; j++) {
-      if (titlesMatch(results[i].title, results[j].title)) {
-        console.log('✅ Consensus:', results[i].title);
-        return results[i];
+  const ordered: MovieIdentified[] = [];
+
+  const pass1 = [faces, vision, gemini].filter(Boolean) as MovieIdentified[];
+  for (let i = 0; i < pass1.length; i++) {
+    for (let j = i + 1; j < pass1.length; j++) {
+      if (titlesMatch(pass1[i].title, pass1[j].title)) {
+        pushDistinct(ordered, pass1[i]);
+        break;
       }
     }
   }
 
-  // Rekognition yuqori ishonch bilan topsa — Claude bilan tasdiqlash
+  if (claude && (claude.confidence === 'high' || claude.confidence === 'medium')) {
+    pushDistinct(ordered, claude);
+  }
+
   if (faces?.confidence === 'high') {
-    const ok = await withTimeout(claudeVerify(croppedBase64, faces.title, mimeType));
-    if (ok !== false) return faces;
-    console.log(`⚠️ Claude Rekognition natijasini rad etdi: "${faces.title}"`);
+    pushDistinct(ordered, faces);
   }
 
-  // PASS 2: Claude asosiy tahlil (har doim ishlatiladi — eng ishonchli)
-  const claude = await withTimeout(identifyByClaude(croppedBase64, mimeType));
-  if (claude) {
-    console.log('✅ Claude:', claude.title);
-    // Vision bilan mosligini tekshirish
-    if (vision && titlesMatch(vision.title, claude.title)) {
-      return claude; // Ikkalasi mos — juda aniq
-    }
-    // Claude high/medium bo'lsa — uni ishon, Vision ga emas
-    if (claude.confidence === 'high' || claude.confidence === 'medium') return claude;
-  }
-
-  // Vision topgan bo'lsa — Claude bilan tasdiqlash
   if (vision) {
-    const verified = await withTimeout(claudeVerify(croppedBase64, vision.title, mimeType));
-    if (verified !== false) {
-      console.log('✅ Vision (Claude tasdiqladi):', vision.title);
-      return vision;
+    pushDistinct(ordered, vision);
+  }
+
+  if (gemini && gemini.confidence !== 'low') {
+    pushDistinct(ordered, gemini);
+  }
+
+  if (faces?.confidence === 'medium') {
+    pushDistinct(ordered, faces);
+  }
+
+  if (ordered.length === 0) {
+    pushDistinct(ordered, faces);
+    if (claude && claude.confidence !== 'low') {
+      pushDistinct(ordered, claude);
     }
-    console.log(`⚠️ Claude Vision natijasini rad etdi: "${vision.title}"`);
-    // Claude rad etdi — Claude o'zining low confidence natijasini qaytarish
-    if (claude) return claude;
+    pushDistinct(ordered, vision);
+    if (gemini && gemini.confidence !== 'low') {
+      pushDistinct(ordered, gemini);
+    }
   }
 
-  // Qolgan natijalar
-  if (claude) return claude;
-  if (gemini) {
-    const ok = await withTimeout(claudeVerify(croppedBase64, gemini.title, mimeType));
-    if (ok !== false) return gemini;
+  const MAX_VERIFY = 8;
+  for (let i = 0; i < Math.min(ordered.length, MAX_VERIFY); i++) {
+    const cand = ordered[i];
+    const ok = await withTimeout(claudeVerify(croppedBase64, cand.title, mimeType));
+    if (ok === true) {
+      console.log('✅ Tasdiqlangan:', cand.title);
+      return cand;
+    }
   }
-  if (faces) return faces;
 
+  console.log('⚠️ Hech bir nomzod Claude tasdiqidan o\'tmadi');
   return null;
 }
 
