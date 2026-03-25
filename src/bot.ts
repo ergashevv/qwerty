@@ -3,7 +3,16 @@ import { Bot, GrammyError, HttpError } from 'grammy';
 import { sequentialize } from '@grammyjs/runner';
 import { handlePhoto } from './handlers/photo';
 import { handleText } from './handlers/text';
-import { getDb } from './db';
+import {
+  getDb,
+  getAudienceStats,
+  markUserStarted,
+  pruneUserActivityHistory,
+  recordUserActivityDay,
+  upsertUser,
+} from './db';
+import { initPostgresSchema, pingPostgres, runAnalyticsRetention } from './db/postgres';
+import { handleIdentificationFeedback } from './handlers/feedback';
 
 const token = process.env.BOT_TOKEN;
 if (!token) {
@@ -13,7 +22,18 @@ if (!token) {
 
 // DB ni ishga tushirish
 getDb();
-console.log('✅ Database tayyor');
+pruneUserActivityHistory();
+console.log('✅ SQLite tayyor');
+
+void (async () => {
+  try {
+    await initPostgresSchema();
+    if (await pingPostgres()) console.log('✅ Postgres (Neon) ulanishi OK');
+    await runAnalyticsRetention();
+  } catch (e) {
+    console.warn('⚠️ Postgres (DATABASE_URL):', (e as Error).message);
+  }
+})();
 
 const bot = new Bot(token);
 
@@ -23,6 +43,12 @@ bot.use(sequentialize((ctx) => ctx.from?.id?.toString() ?? 'unknown'));
 
 // ─── /start ──────────────────────────────────────────────────────────────────
 bot.command('start', async (ctx) => {
+  const uid = ctx.from?.id;
+  if (uid) {
+    upsertUser(uid, ctx.from?.username, ctx.from?.first_name);
+    markUserStarted(uid);
+    recordUserActivityDay(uid);
+  }
   const name = ctx.from?.first_name || 'Do\'stim';
   await ctx.reply(
     `👋 Assalomu alaykum, <b>${name}</b>!\n\n` +
@@ -61,7 +87,7 @@ bot.command('stats', async (ctx) => {
 
   try {
     const db = getDb();
-    const userCount = (db.prepare('SELECT COUNT(*) as c FROM users').get() as { c: number }).c;
+    const aud = getAudienceStats();
     const cacheCount = (db.prepare('SELECT COUNT(*) as c FROM movie_cache').get() as { c: number }).c;
     const topFilms = db.prepare('SELECT title, hit_count FROM movie_cache ORDER BY hit_count DESC LIMIT 5').all() as { title: string; hit_count: number }[];
     const totalRequests = (db.prepare('SELECT SUM(request_count) as s FROM users').get() as { s: number | null }).s || 0;
@@ -70,9 +96,11 @@ bot.command('stats', async (ctx) => {
 
     await ctx.reply(
       `📊 <b>Statistika</b>\n\n` +
-      `👥 Foydalanuvchilar: ${userCount}\n` +
+      `👥 Jami (baza): ${aud.totalUsers}\n` +
+      `▶️ /start bosgan: ${aud.usersStarted}\n` +
+      `📅 DAU (bugun UTC): ${aud.dau} · WAU (7 kun): ${aud.wau} · MAU (30 kun): ${aud.mau}\n\n` +
       `🎬 Cache da filmlar: ${cacheCount}\n` +
-      `🔢 Jami so'rovlar: ${totalRequests}\n\n` +
+      `🔢 Jami matn so'rovlari (yig'indi): ${totalRequests}\n\n` +
       `🏆 <b>Top 5 film:</b>\n${topList || 'Hali yo\'q'}`,
       { parse_mode: 'HTML' }
     );
@@ -97,6 +125,11 @@ bot.on('message:document', async (ctx) => {
 
 // ─── TEXT HANDLER ─────────────────────────────────────────────────────────────
 bot.on('message:text', handleText);
+
+// ─── FILM NATIJASI — foydalanuvchi feedback (inline tugmalar) ─────────────────
+bot.callbackQuery(/^fb:/, async (ctx) => {
+  await handleIdentificationFeedback(ctx);
+});
 
 // ─── ERROR HANDLING ───────────────────────────────────────────────────────────
 bot.catch((err) => {

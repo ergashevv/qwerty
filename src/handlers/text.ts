@@ -1,6 +1,14 @@
 import { Context } from 'grammy';
-import { identifyFromText, getMovieDetails } from '../services/movieService';
-import { getCached, setCache, upsertUser, incrementUserRequests, getWindowRequestCount } from '../db';
+import { identifyFromText, getMovieDetails, imdbIdFromMovieUrl } from '../services/movieService';
+import {
+  getCached,
+  setCache,
+  upsertUser,
+  incrementUserRequests,
+  getWindowRequestCount,
+  recordUserActivityDay,
+} from '../db';
+import { insertPendingFeedback } from '../db/feedbackPending';
 import { sendMovieResult } from './photo';
 import { USER_REQUEST_LIMIT, isUnlimitedUser } from '../config/limits';
 
@@ -12,6 +20,7 @@ export async function handleText(ctx: Context): Promise<void> {
   if (!userId) return;
 
   upsertUser(userId, ctx.from?.username, ctx.from?.first_name);
+  recordUserActivityDay(userId);
 
   if (!isUnlimitedUser(userId)) {
     if (getWindowRequestCount(userId) >= USER_REQUEST_LIMIT) {
@@ -54,6 +63,9 @@ export async function handleText(ctx: Context): Promise<void> {
         plotUz: cached.plot_uz || 'Tavsif mavjud emas',
         imdbUrl: cached.imdb_url || null,
         watchLinks: cached.watch_links ? JSON.parse(cached.watch_links) : [],
+        tmdbId: null,
+        imdbId: imdbIdFromMovieUrl(cached.imdb_url || null),
+        mediaType: identified.type,
       };
     } else {
       details = await getMovieDetails(identified);
@@ -71,7 +83,21 @@ export async function handleText(ctx: Context): Promise<void> {
     }
 
     await ctx.api.deleteMessage(ctx.chat!.id, processing.message_id);
-    await sendMovieResult(ctx, details);
+
+    const pendingId = insertPendingFeedback({
+      telegramUserId: userId,
+      chatId: ctx.chat!.id,
+      source: 'text',
+      predictedTitle: details.title,
+      predictedUzTitle: details.uzTitle,
+      tmdbId: details.tmdbId ?? null,
+      imdbId: details.imdbId ?? null,
+      mediaType: details.mediaType ?? identified.type,
+      confidence: identified.confidence ?? null,
+      photoFileId: null,
+    });
+
+    await sendMovieResult(ctx, details, { pendingFeedbackId: pendingId });
   } catch (err) {
     console.error('Text handler xato:', err);
     await ctx.api.editMessageText(

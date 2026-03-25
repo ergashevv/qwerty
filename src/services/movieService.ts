@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import axios from 'axios';
+import { withGemini } from './geminiClient';
 import sharpLib from 'sharp';
 import { recognizeCelebrities, extractImdbId } from './rekognition';
 
@@ -21,6 +22,17 @@ export interface MovieDetails {
   plotUz: string;
   imdbUrl: string | null;
   watchLinks: WatchLink[];
+  /** Analytics / feedback — cache yo‘lda bo‘sh bo‘lishi mumkin */
+  tmdbId?: number | null;
+  imdbId?: string | null;
+  mediaType?: MediaType;
+}
+
+/** Cache dan kelgan imdb_url dan tt... ID */
+export function imdbIdFromMovieUrl(imdbUrl: string | null | undefined): string | null {
+  if (!imdbUrl) return null;
+  const m = imdbUrl.match(/(tt\d+)/);
+  return m ? m[1] : null;
 }
 
 export interface WatchLink {
@@ -388,10 +400,11 @@ async function geminiPickFromCandidates(base64: string, actors: string, candidat
   try {
     const genAI = new GoogleGenerativeAI(GEMINI_KEY);
     const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-    const result = await model.generateContent([
-      { inlineData: { data: base64, mimeType: 'image/jpeg' } },
-      {
-        text: `Recognized actors: ${actors}
+    const result = await withGemini(() =>
+      model.generateContent([
+        { inlineData: { data: base64, mimeType: 'image/jpeg' } },
+        {
+          text: `Recognized actors: ${actors}
 Candidate movies/shows (pick exactly ONE from this list): ${candidates}
 
 Look at the screenshot carefully. Based on the scene details (costumes, setting, lighting, props, visible text in the film frame), which ONE of the candidates does this screenshot belong to? Also identify which part/sequel if applicable.
@@ -400,8 +413,9 @@ If none of the candidates fit the scene, respond with: {"title": "", "type": "mo
 
 Respond ONLY with JSON:
 {"title": "Exact title from candidates", "type": "movie" or "tv", "confidence": "high/medium/low"}`,
-      },
-    ]);
+        },
+      ])
+    );
     const text = result.response.text();
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return null;
@@ -425,11 +439,12 @@ async function identifyByGemini(base64: string): Promise<MovieIdentified | null>
   try {
     const genAI = new GoogleGenerativeAI(GEMINI_KEY);
     const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-    const result = await model.generateContent([
-      {
-        inlineData: { data: base64, mimeType: 'image/jpeg' }
-      },
-`You are an expert in world cinema including Turkish, Korean, Hollywood, Russian, and Uzbek films.
+    const result = await withGemini(() =>
+      model.generateContent([
+        {
+          inlineData: { data: base64, mimeType: 'image/jpeg' },
+        },
+        `You are an expert in world cinema including Turkish, Korean, Hollywood, Russian, and Uzbek films.
 
 Identify the EXACT movie or TV show in this screenshot.
 
@@ -447,8 +462,9 @@ For Turkish crime: consider "Çukur", "Ezel", "Kara Para Aşk".
 Respond ONLY with JSON:
 {"title": "Exact title or unknown", "type": "movie" or "tv", "confidence": "high/medium/low", "reasoning": "brief explanation"}
 
-If you are not sure which ONE film this is, use "unknown" for title and "low" for confidence.`
-    ]);
+If you are not sure which ONE film this is, use "unknown" for title and "low" for confidence.`,
+      ])
+    );
     const text = result.response.text();
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return null;
@@ -502,10 +518,11 @@ async function geminiVerify(base64: string, candidateTitle: string, mimeType: st
   try {
     const genAI = new GoogleGenerativeAI(GEMINI_KEY);
     const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-    const result = await model.generateContent([
-      { inlineData: { data: base64, mimeType: mimeType } },
-      {
-        text: `Does this screenshot clearly belong to the movie/TV show "${candidateTitle}"?
+    const result = await withGemini(() =>
+      model.generateContent([
+        { inlineData: { data: base64, mimeType: mimeType } },
+        {
+          text: `Does this screenshot clearly belong to the movie/TV show "${candidateTitle}"?
 
 CRITICAL RULES:
 1. IGNORE watermarks and overlaid text (TASAVVUR, CINEMASCENEUZ, channel logos, player UI, timestamps)
@@ -516,8 +533,9 @@ CRITICAL RULES:
 6. Answer false if: image quality is too poor, scene could plausibly be from several different films, wrong medium (e.g. cartoon vs live-action), or you have meaningful doubt
 
 Answer ONLY with JSON: {"match": true} or {"match": false, "reason": "brief explanation"}`,
-      },
-    ]);
+        },
+      ])
+    );
     const text = result.response.text();
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return false;
@@ -562,13 +580,15 @@ export async function identifyMovie(base64: string, mimeType: string): Promise<M
 
   console.log(`Pass1 — Faces: ${faces?.title || '-'}, Vision: ${vision?.title || '-'}, Gemini: ${gemini?.title || '-'}`);
 
+  /**
+   * Tasdiq tartibi: avvalo ikki manba (yuz + vision yoki boshqa juftlik) kelishgan nomzod,
+   * keyin yuqori ishonchli yuz, vision, eng oxirida yolg‘iz Gemini taklifi.
+   * Oldin Gemini birinchi qo‘yilgandi — shunda noto‘g‘ri Gemini javobi birinchi tekshirilib,
+   * “tasdiqlangan” bo‘lib qolardi, aslida to‘g‘ri konsensus (masalan Faces+Vision) esa keyin.
+   */
   const ordered: MovieIdentified[] = [];
-
-  if (gemini && gemini.confidence !== 'low') {
-    pushDistinct(ordered, gemini);
-  }
-
   const pass1 = [faces, vision, gemini].filter(Boolean) as MovieIdentified[];
+
   for (let i = 0; i < pass1.length; i++) {
     for (let j = i + 1; j < pass1.length; j++) {
       if (titlesMatch(pass1[i].title, pass1[j].title)) {
@@ -601,6 +621,8 @@ export async function identifyMovie(base64: string, mimeType: string): Promise<M
       pushDistinct(ordered, gemini);
     }
   }
+
+  console.log(`Nomzodlar tartibi (tasdiq): ${ordered.map((c) => c.title).join(' → ') || '—'}`);
 
   const MAX_VERIFY = 8;
   for (let i = 0; i < Math.min(ordered.length, MAX_VERIFY); i++) {
@@ -671,7 +693,7 @@ Respond ONLY with JSON:
   try {
     const genAI = new GoogleGenerativeAI(GEMINI_KEY);
     const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-    const result = await model.generateContent(llmPrompt);
+    const result = await withGemini(() => model.generateContent(llmPrompt));
     const text = result.response.text();
     const m = text.match(/\{[\s\S]*?\}/);
     if (m) {
@@ -692,8 +714,10 @@ async function translateToUzbek(text: string): Promise<string> {
   try {
     const genAI = new GoogleGenerativeAI(GEMINI_KEY);
     const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-    const r = await model.generateContent(
-      `Translate this movie plot to Uzbek (lotin yozuvida). Only output the translation:\n"${text}"`
+    const r = await withGemini(() =>
+      model.generateContent(
+        `Translate this movie plot to Uzbek (lotin yozuvida). Only output the translation:\n"${text}"`
+      )
     );
     return r.response.text()?.trim() || text;
   } catch { return text; }
@@ -704,8 +728,10 @@ async function translateTitle(englishTitle: string): Promise<string> {
   try {
     const genAI = new GoogleGenerativeAI(GEMINI_KEY);
     const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-    const r = await model.generateContent(
-      `Translate ONLY the movie/TV show title "${englishTitle}" to Uzbek (official localization used in Uzbek dubbing). If no official Uzbek title exists, transliterate or keep original. Output ONLY the title, nothing else.`
+    const r = await withGemini(() =>
+      model.generateContent(
+        `Translate ONLY the movie/TV show title "${englishTitle}" to Uzbek (official localization used in Uzbek dubbing). If no official Uzbek title exists, transliterate or keep original. Output ONLY the title, nothing else.`
+      )
     );
     const result = r.response.text()?.trim() || englishTitle;
     return result.toLowerCase() === englishTitle.toLowerCase() ? englishTitle : result;
@@ -826,5 +852,8 @@ export async function getMovieDetails(identified: MovieIdentified): Promise<Movi
     plotUz,
     imdbUrl: imdbId ? `https://www.imdb.com/title/${imdbId}` : null,
     watchLinks,
+    tmdbId: tmdbResult?.id ?? null,
+    imdbId,
+    mediaType: type,
   };
 }

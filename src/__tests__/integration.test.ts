@@ -19,8 +19,11 @@ jest.unmock('sharp');
 import 'dotenv/config';
 import axios from 'axios';
 
-// Timeout: haqiqiy API chaqiruvlar uchun ko'proq vaqt
-jest.setTimeout(30000);
+// withGemini() oralig'i integratsiya testlarini sekinlashtirmasin
+process.env.GEMINI_MIN_GAP_MS = process.env.GEMINI_MIN_GAP_MS ?? '0';
+
+// Timeout: haqiqiy API chaqiruvlar + identifyMovie (bir nechta Gemini chaqiruv)
+jest.setTimeout(120000);
 
 // ─── TEST RASMLARI ────────────────────────────────────────────────────────────
 

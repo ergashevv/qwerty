@@ -1,8 +1,31 @@
 import { Context } from 'grammy';
+import type { InlineKeyboardButton } from 'grammy/types';
 import axios from 'axios';
-import { identifyMovie, getMovieDetails, MovieDetails } from '../services/movieService';
-import { getCached, setCache, upsertUser, incrementUserRequests, getWindowRequestCount } from '../db';
-import { USER_REQUEST_LIMIT, isUnlimitedUser } from '../config/limits';
+import {
+  identifyMovie,
+  getMovieDetails,
+  MovieDetails,
+  imdbIdFromMovieUrl,
+} from '../services/movieService';
+import {
+  getCached,
+  setCache,
+  upsertUser,
+  canUserSendPhoto,
+  recordPhotoRequest,
+  recordUserActivityDay,
+} from '../db';
+import { insertPendingFeedback } from '../db/feedbackPending';
+import {
+  PHOTO_BURST_LIMIT,
+  PHOTO_BURST_WINDOW_SECONDS,
+  PHOTO_DAILY_LIMIT,
+} from '../config/limits';
+import {
+  STATUS_DETAILS_LINES,
+  STATUS_IDENTIFY_LINES,
+  withRotatingStatus,
+} from './rotatingStatus';
 
 export async function handlePhoto(ctx: Context): Promise<void> {
   const userId  = ctx.from?.id;
@@ -12,17 +35,30 @@ export async function handlePhoto(ctx: Context): Promise<void> {
   if (!userId) return;
 
   upsertUser(userId, username, firstName);
+  recordUserActivityDay(userId);
 
-  if (!isUnlimitedUser(userId)) {
-    if (getWindowRequestCount(userId) >= USER_REQUEST_LIMIT) {
+  const photoGate = canUserSendPhoto(userId);
+  if (!photoGate.ok) {
+    if (photoGate.reason === 'burst') {
+      const m = Math.round(PHOTO_BURST_WINDOW_SECONDS / 60);
       await ctx.reply(
-        `⚠️ So'rov limiti tugadi (${USER_REQUEST_LIMIT} ta / 12 soat).\n` +
-          '⏳ 12 soatdan keyin yana 3 ta ochiladi.'
+        `⏳ Juda tez-tez rasm yuboryapsiz.\n\n` +
+          `Bitta filmni topish uchun 3–4 ta kadr yuborishingiz mumkin — ` +
+          `lekin ${m} daqiqada maksimal <b>${PHOTO_BURST_LIMIT}</b> ta rasm.\n` +
+          `Biroz kutib, yana urinib ko'ring.`,
+        { parse_mode: 'HTML' }
       );
-      return;
+    } else {
+      await ctx.reply(
+        `⚠️ Kunlik rasm limiti tugadi (<b>${PHOTO_DAILY_LIMIT}</b> ta / kun).\n` +
+          `Ertaga yana foydalanishingiz mumkin.`,
+        { parse_mode: 'HTML' }
+      );
     }
-    incrementUserRequests(userId);
+    return;
   }
+
+  recordPhotoRequest(userId);
 
   const processing = await ctx.reply('🔍 Qidirilmoqda...');
 
@@ -43,10 +79,18 @@ export async function handlePhoto(ctx: Context): Promise<void> {
     const base64 = Buffer.from(response.data).toString('base64');
     const mimeType = 'image/jpeg';
 
-    await ctx.api.editMessageText(ctx.chat!.id, processing.message_id, '🎬 Film aniqlanmoqda...');
+    const chatId = ctx.chat!.id;
+    const msgId = processing.message_id;
+    await ctx.api.editMessageText(chatId, msgId, STATUS_IDENTIFY_LINES[0]);
 
-    // Film aniqlanish
-    const identified = await identifyMovie(base64, mimeType);
+    const identified = await withRotatingStatus(
+      ctx,
+      chatId,
+      msgId,
+      STATUS_IDENTIFY_LINES,
+      () => identifyMovie(base64, mimeType),
+      { intervalMs: 3000 }
+    );
 
     if (!identified) {
       await ctx.api.editMessageText(
@@ -59,13 +103,16 @@ export async function handlePhoto(ctx: Context): Promise<void> {
       return;
     }
 
-    await ctx.api.editMessageText(ctx.chat!.id, processing.message_id, `🎯 "${identified.title}" topildi! Ma'lumotlar yuklanmoqda...`);
-
     // Cache tekshirish
     const cached = getCached(identified.title);
     let details: MovieDetails;
 
     if (cached) {
+      await ctx.api.editMessageText(
+        chatId,
+        msgId,
+        `🎯 «${identified.title}» topildi — ma’lumotlar chiqarilmoqda...`
+      );
       details = {
         title: cached.title,
         uzTitle: cached.uz_title || cached.title,
@@ -76,9 +123,21 @@ export async function handlePhoto(ctx: Context): Promise<void> {
         plotUz: cached.plot_uz || 'Tavsif mavjud emas',
         imdbUrl: cached.imdb_url || null,
         watchLinks: cached.watch_links ? JSON.parse(cached.watch_links) : [],
+        tmdbId: null,
+        imdbId: imdbIdFromMovieUrl(cached.imdb_url || null),
+        mediaType: identified.type,
       };
     } else {
-      details = await getMovieDetails(identified);
+      const detailLines = STATUS_DETAILS_LINES(identified.title);
+      await ctx.api.editMessageText(chatId, msgId, detailLines[0]);
+      details = await withRotatingStatus(
+        ctx,
+        chatId,
+        msgId,
+        detailLines,
+        () => getMovieDetails(identified),
+        { intervalMs: 2800 }
+      );
       setCache(identified.title, {
         title: details.title,
         uz_title: details.uzTitle,
@@ -93,10 +152,22 @@ export async function handlePhoto(ctx: Context): Promise<void> {
     }
 
     // Processing xabarini o'chirish
-    await ctx.api.deleteMessage(ctx.chat!.id, processing.message_id);
+    await ctx.api.deleteMessage(chatId, msgId);
 
-    // Javob yuborish
-    await sendMovieResult(ctx, details);
+    const pendingId = insertPendingFeedback({
+      telegramUserId: userId,
+      chatId: ctx.chat!.id,
+      source: 'photo',
+      predictedTitle: details.title,
+      predictedUzTitle: details.uzTitle,
+      tmdbId: details.tmdbId ?? null,
+      imdbId: details.imdbId ?? null,
+      mediaType: details.mediaType ?? identified.type,
+      confidence: identified.confidence ?? null,
+      photoFileId: largest.file_id,
+    });
+
+    await sendMovieResult(ctx, details, { pendingFeedbackId: pendingId });
   } catch (err) {
     console.error('Photo handler xato:', err);
     await ctx.api.editMessageText(
@@ -107,7 +178,11 @@ export async function handlePhoto(ctx: Context): Promise<void> {
   }
 }
 
-export async function sendMovieResult(ctx: Context, details: MovieDetails): Promise<void> {
+export async function sendMovieResult(
+  ctx: Context,
+  details: MovieDetails,
+  opts?: { pendingFeedbackId?: number }
+): Promise<void> {
   const title    = details.uzTitle !== details.title ? details.uzTitle : details.title;
   const origLine = details.originalTitle && details.originalTitle !== details.title
     ? `\n📽 Asl nomi: <b>${escHtml(details.originalTitle)}</b>` : '';
@@ -122,10 +197,9 @@ export async function sendMovieResult(ctx: Context, details: MovieDetails): Prom
   ].filter(Boolean).join('\n');
 
   // Inline keyboard — tomosha qilish havolalari
-  const watchButtons = details.watchLinks.slice(0, 4).map(link => ([{
-    text: `▶️ ${link.source}`,
-    url: link.link,
-  }]));
+  const watchButtons: InlineKeyboardButton[][] = details.watchLinks.slice(0, 4).map((link) => [
+    { text: `▶️ ${link.source}`, url: link.link },
+  ]);
 
   if (details.imdbUrl) {
     watchButtons.push([{ text: '🌐 IMDb', url: details.imdbUrl }]);
@@ -133,6 +207,14 @@ export async function sendMovieResult(ctx: Context, details: MovieDetails): Prom
 
   if (watchButtons.length === 0) {
     watchButtons.push([{ text: '🔍 Google da qidirish', url: `https://www.google.com/search?q=${encodeURIComponent(details.uzTitle + ' o\'zbek tilida tomosha')}` }]);
+  }
+
+  const pid = opts?.pendingFeedbackId;
+  if (pid != null) {
+    watchButtons.push([
+      { text: '✅ Ha, shu film', callback_data: `fb:${pid}:y` },
+      { text: "❌ Yo'q, bu emas", callback_data: `fb:${pid}:n` },
+    ]);
   }
 
   const replyMarkup = { inline_keyboard: watchButtons };

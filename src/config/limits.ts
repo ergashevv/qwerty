@@ -1,8 +1,20 @@
-/** Har bir foydalanuvchi uchun so'rovlar oynasi (sekund) — 12 soat */
+/** Matn so'rovlari: har bir foydalanuvchi uchun oyna (sekund) — 12 soat */
 export const REQUEST_WINDOW_SECONDS = 12 * 60 * 60;
 
-/** Oynadagi maksimal so'rovlar (keyingi oynada qayta 3 ta) */
+/** Matn: oynadagi maksimal so'rovlar */
 export const USER_REQUEST_LIMIT = 3;
+
+/**
+ * Rasm: bir film qidirganda 3–4 ta screenshot + zaxira.
+ * Qisqa oynada burst (sekund) — masalan 15 daqiqa.
+ */
+export const PHOTO_BURST_WINDOW_SECONDS = parseInt(process.env.PHOTO_BURST_WINDOW_SECONDS || '900', 10);
+
+/** Shu oynada maksimal rasm (6 = 3–4 urinish + zaxira) */
+export const PHOTO_BURST_LIMIT = parseInt(process.env.PHOTO_BURST_LIMIT || '6', 10);
+
+/** Kuniga maksimal rasm (spam oldini olish) */
+export const PHOTO_DAILY_LIMIT = parseInt(process.env.PHOTO_DAILY_LIMIT || '80', 10);
 
 /**
  * Cheksiz limit — vergul bilan ajratilgan Telegram user id lar.
@@ -12,8 +24,8 @@ function parseUnlimitedIds(): Set<number> {
   const raw = process.env.UNLIMITED_TELEGRAM_IDS ?? '5737309471';
   const ids = raw
     .split(',')
-    .map(s => parseInt(s.trim(), 10))
-    .filter(n => !Number.isNaN(n));
+    .map((s) => parseInt(s.trim(), 10))
+    .filter((n) => !Number.isNaN(n));
   return new Set(ids);
 }
 

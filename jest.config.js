@@ -1,13 +1,18 @@
 /** @type {import('ts-jest').JestConfigWithTsJest} */
 module.exports = {
+  modulePathIgnorePatterns: ['<rootDir>/dist/'],
   projects: [
     // ─── UNIT TESTLAR (mock + fake keys) ─────────────────────────────────────
     {
       displayName: 'unit',
       preset: 'ts-jest',
       testEnvironment: 'node',
-      testMatch: ['<rootDir>/src/__tests__/movieService.test.ts'],
-      setupFiles: ['<rootDir>/src/__tests__/setup.ts'],
+      testMatch: ['<rootDir>/src/__tests__/**/*.test.ts'],
+      testPathIgnorePatterns: ['<rootDir>/src/__tests__/integration.test.ts'],
+      setupFiles: [
+        '<rootDir>/src/__tests__/setup.ts',
+        'dotenv/config',
+      ],
       transform: {
         '^.+\\.tsx?$': ['ts-jest', {
           tsconfig: { module: 'commonjs', esModuleInterop: true },
