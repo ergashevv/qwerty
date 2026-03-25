@@ -14,6 +14,8 @@ export interface PendingFeedbackInsert {
   confidence: string | null;
   /** Foydalanuvchi yuborgan screenshot (faqat photo oqimi) */
   photoFileId: string | null;
+  /** Fikr tugmalari qo‘shilmasdan oldingi inline klaviatura (JSON) — tugma bosilganda qayta qo‘yiladi */
+  keyboardKeepJson: string | null;
 }
 
 export interface PendingFeedbackRow {
@@ -28,6 +30,7 @@ export interface PendingFeedbackRow {
   media_type: string | null;
   confidence: string | null;
   photo_file_id: string | null;
+  keyboard_keep_json: string | null;
   created_at: number;
 }
 
@@ -48,8 +51,8 @@ export function insertPendingFeedback(row: PendingFeedbackInsert): number {
       `
     INSERT INTO pending_identification_feedback (
       telegram_user_id, chat_id, source, predicted_title, predicted_uz_title,
-      tmdb_id, imdb_id, media_type, confidence, photo_file_id, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      tmdb_id, imdb_id, media_type, confidence, photo_file_id, keyboard_keep_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `
     )
     .run(
@@ -63,6 +66,7 @@ export function insertPendingFeedback(row: PendingFeedbackInsert): number {
       row.mediaType,
       row.confidence,
       row.photoFileId,
+      row.keyboardKeepJson,
       now
     );
   return Number(r.lastInsertRowid);

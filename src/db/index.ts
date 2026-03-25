@@ -84,6 +84,16 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_user_activity_day ON user_activity_day(day_utc);
   `);
   migrateAudienceSchema();
+  migratePendingFeedbackKeyboardColumn();
+}
+
+/** pending_identification_feedback: fikr tugmalari olingandan keyin qoladigan klaviatura */
+function migratePendingFeedbackKeyboardColumn(): void {
+  const d = getDb();
+  const cols = d.prepare(`PRAGMA table_info(pending_identification_feedback)`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === 'keyboard_keep_json')) {
+    d.exec(`ALTER TABLE pending_identification_feedback ADD COLUMN keyboard_keep_json TEXT`);
+  }
 }
 
 /** started_at va boshqa ustunlar — mavjud DB uchun */

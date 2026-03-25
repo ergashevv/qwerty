@@ -9,7 +9,7 @@ import {
   recordUserActivityDay,
 } from '../db';
 import { insertPendingFeedback } from '../db/feedbackPending';
-import { sendMovieResult } from './photo';
+import { buildWatchKeyboard, sendMovieResult } from './photo';
 import { USER_REQUEST_LIMIT, isUnlimitedUser } from '../config/limits';
 
 export async function handleText(ctx: Context): Promise<void> {
@@ -84,6 +84,7 @@ export async function handleText(ctx: Context): Promise<void> {
 
     await ctx.api.deleteMessage(ctx.chat!.id, processing.message_id);
 
+    const watchKb = buildWatchKeyboard(details);
     const pendingId = insertPendingFeedback({
       telegramUserId: userId,
       chatId: ctx.chat!.id,
@@ -95,6 +96,7 @@ export async function handleText(ctx: Context): Promise<void> {
       mediaType: details.mediaType ?? identified.type,
       confidence: identified.confidence ?? null,
       photoFileId: null,
+      keyboardKeepJson: JSON.stringify({ inline_keyboard: watchKb }),
     });
 
     await sendMovieResult(ctx, details, { pendingFeedbackId: pendingId });

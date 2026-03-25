@@ -1,4 +1,5 @@
 import { Context } from 'grammy';
+import type { InlineKeyboardMarkup } from 'grammy/types';
 import { insertAnalyticsEvent } from '../db/postgres';
 import { consumePendingFeedback } from '../db/feedbackPending';
 
@@ -40,6 +41,24 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
 
   const correct = vote === 'y';
 
+  await ctx.answerCallbackQuery({
+    text: correct ? 'Rahmat! ❤️' : 'Rahmat, yaxshilaymiz 🙏',
+    show_alert: false,
+  });
+
+  /** Fikr tugmalarini olib tashlash; tomosha havolalari qoladi */
+  const keep = row.keyboard_keep_json;
+  try {
+    if (keep) {
+      const markup = JSON.parse(keep) as InlineKeyboardMarkup;
+      await ctx.editMessageReplyMarkup({ reply_markup: markup });
+    } else {
+      await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
+    }
+  } catch {
+    await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } }).catch(() => {});
+  }
+
   await insertAnalyticsEvent('identification_feedback', {
     correct,
     source: row.source,
@@ -51,10 +70,5 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
     confidence: row.confidence ?? null,
     telegram_user_id: row.telegram_user_id,
     ...(correct ? {} : { photo_file_id: row.photo_file_id ?? null }),
-  });
-
-  await ctx.answerCallbackQuery({
-    text: correct ? 'Rahmat! ❤️' : 'Rahmat, yaxshilaymiz 🙏',
-    show_alert: false,
   });
 }

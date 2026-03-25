@@ -154,6 +154,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
     // Processing xabarini o'chirish
     await ctx.api.deleteMessage(chatId, msgId);
 
+    const watchKb = buildWatchKeyboard(details);
     const pendingId = insertPendingFeedback({
       telegramUserId: userId,
       chatId: ctx.chat!.id,
@@ -165,6 +166,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
       mediaType: details.mediaType ?? identified.type,
       confidence: identified.confidence ?? null,
       photoFileId: largest.file_id,
+      keyboardKeepJson: JSON.stringify({ inline_keyboard: watchKb }),
     });
 
     await sendMovieResult(ctx, details, { pendingFeedbackId: pendingId });
@@ -176,6 +178,28 @@ export async function handlePhoto(ctx: Context): Promise<void> {
       '❌ Xatolik yuz berdi. Qayta urinib ko\'ring.'
     ).catch(() => {});
   }
+}
+
+/** Tomosha havolalari + IMDb/Google — fikr tugmalari qo‘shilmasdan */
+export function buildWatchKeyboard(details: MovieDetails): InlineKeyboardButton[][] {
+  const rows: InlineKeyboardButton[][] = details.watchLinks.slice(0, 4).map((link) => [
+    { text: `▶️ ${link.source}`, url: link.link },
+  ]);
+
+  if (details.imdbUrl) {
+    rows.push([{ text: '🌐 IMDb', url: details.imdbUrl }]);
+  }
+
+  if (rows.length === 0) {
+    rows.push([
+      {
+        text: '🔍 Google da qidirish',
+        url: `https://www.google.com/search?q=${encodeURIComponent(details.uzTitle + " o'zbek tilida tomosha")}`,
+      },
+    ]);
+  }
+
+  return rows;
 }
 
 export async function sendMovieResult(
@@ -196,19 +220,7 @@ export async function sendMovieResult(
     `📖 ${escHtml(details.plotUz.slice(0, 300))}${details.plotUz.length > 300 ? '...' : ''}`,
   ].filter(Boolean).join('\n');
 
-  // Inline keyboard — tomosha qilish havolalari
-  const watchButtons: InlineKeyboardButton[][] = details.watchLinks.slice(0, 4).map((link) => [
-    { text: `▶️ ${link.source}`, url: link.link },
-  ]);
-
-  if (details.imdbUrl) {
-    watchButtons.push([{ text: '🌐 IMDb', url: details.imdbUrl }]);
-  }
-
-  if (watchButtons.length === 0) {
-    watchButtons.push([{ text: '🔍 Google da qidirish', url: `https://www.google.com/search?q=${encodeURIComponent(details.uzTitle + ' o\'zbek tilida tomosha')}` }]);
-  }
-
+  const watchButtons = buildWatchKeyboard(details);
   const pid = opts?.pendingFeedbackId;
   if (pid != null) {
     watchButtons.push([
