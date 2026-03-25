@@ -85,6 +85,7 @@ function initSchema() {
   `);
   migrateAudienceSchema();
   migratePendingFeedbackKeyboardColumn();
+  migratePendingFeedbackTokenColumn();
 }
 
 /** pending_identification_feedback: fikr tugmalari olingandan keyin qoladigan klaviatura */
@@ -93,6 +94,18 @@ function migratePendingFeedbackKeyboardColumn(): void {
   const cols = d.prepare(`PRAGMA table_info(pending_identification_feedback)`).all() as { name: string }[];
   if (!cols.some((c) => c.name === 'keyboard_keep_json')) {
     d.exec(`ALTER TABLE pending_identification_feedback ADD COLUMN keyboard_keep_json TEXT`);
+  }
+}
+
+/** Har bir natija uchun noyob callback kalit (id qayta ishlatilishi muammosiz) */
+function migratePendingFeedbackTokenColumn(): void {
+  const d = getDb();
+  const cols = d.prepare(`PRAGMA table_info(pending_identification_feedback)`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === 'feedback_token')) {
+    d.exec(`ALTER TABLE pending_identification_feedback ADD COLUMN feedback_token TEXT`);
+    d.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_feedback_token ON pending_identification_feedback(feedback_token) WHERE feedback_token IS NOT NULL`
+    );
   }
 }
 

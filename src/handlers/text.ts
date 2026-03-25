@@ -85,7 +85,7 @@ export async function handleText(ctx: Context): Promise<void> {
     await ctx.api.deleteMessage(ctx.chat!.id, processing.message_id);
 
     const watchKb = buildWatchKeyboard(details);
-    const pendingId = insertPendingFeedback({
+    const pendingToken = insertPendingFeedback({
       telegramUserId: userId,
       chatId: ctx.chat!.id,
       source: 'text',
@@ -99,7 +99,7 @@ export async function handleText(ctx: Context): Promise<void> {
       keyboardKeepJson: JSON.stringify({ inline_keyboard: watchKb }),
     });
 
-    await sendMovieResult(ctx, details, { pendingFeedbackId: pendingId });
+    await sendMovieResult(ctx, details, { pendingFeedbackToken: pendingToken });
   } catch (err) {
     console.error('Text handler xato:', err);
     await ctx.api.editMessageText(

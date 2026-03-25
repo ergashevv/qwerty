@@ -16,10 +16,9 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
     await ctx.answerCallbackQuery({ text: 'Noto‘g‘ri format.', show_alert: true });
     return;
   }
-  const idStr = rest.slice(0, colon);
+  const keyPart = rest.slice(0, colon);
   const vote = rest.slice(colon + 1);
-  const id = parseInt(idStr, 10);
-  if (!Number.isFinite(id) || (vote !== 'y' && vote !== 'n')) {
+  if (vote !== 'y' && vote !== 'n') {
     await ctx.answerCallbackQuery({ text: 'Noto‘g‘ri tugma.', show_alert: true });
     return;
   }
@@ -30,12 +29,10 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
     return;
   }
 
-  const row = consumePendingFeedback(id, uid);
+  const row = consumePendingFeedback(keyPart, uid);
   if (!row) {
-    await ctx.answerCallbackQuery({
-      text: 'Bu javob allaqachon qabul qilingan yoki muddati o‘tgan.',
-      show_alert: true,
-    });
+    /** Ikkinchi bosish, eski xabar yoki boshqa user — ogohlantirishsiz */
+    await ctx.answerCallbackQuery({ text: 'Qabul qilingan' });
     return;
   }
 

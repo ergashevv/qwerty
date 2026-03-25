@@ -155,7 +155,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
     await ctx.api.deleteMessage(chatId, msgId);
 
     const watchKb = buildWatchKeyboard(details);
-    const pendingId = insertPendingFeedback({
+    const pendingToken = insertPendingFeedback({
       telegramUserId: userId,
       chatId: ctx.chat!.id,
       source: 'photo',
@@ -169,7 +169,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
       keyboardKeepJson: JSON.stringify({ inline_keyboard: watchKb }),
     });
 
-    await sendMovieResult(ctx, details, { pendingFeedbackId: pendingId });
+    await sendMovieResult(ctx, details, { pendingFeedbackToken: pendingToken });
   } catch (err) {
     console.error('Photo handler xato:', err);
     await ctx.api.editMessageText(
@@ -205,7 +205,7 @@ export function buildWatchKeyboard(details: MovieDetails): InlineKeyboardButton[
 export async function sendMovieResult(
   ctx: Context,
   details: MovieDetails,
-  opts?: { pendingFeedbackId?: number }
+  opts?: { pendingFeedbackToken?: string }
 ): Promise<void> {
   const title    = details.uzTitle !== details.title ? details.uzTitle : details.title;
   const origLine = details.originalTitle && details.originalTitle !== details.title
@@ -221,11 +221,11 @@ export async function sendMovieResult(
   ].filter(Boolean).join('\n');
 
   const watchButtons = buildWatchKeyboard(details);
-  const pid = opts?.pendingFeedbackId;
-  if (pid != null) {
+  const pTok = opts?.pendingFeedbackToken;
+  if (pTok != null && pTok.length > 0) {
     watchButtons.push([
-      { text: '✅ Ha, shu film', callback_data: `fb:${pid}:y` },
-      { text: "❌ Yo'q, bu emas", callback_data: `fb:${pid}:n` },
+      { text: '✅ Ha, shu film', callback_data: `fb:${pTok}:y` },
+      { text: "❌ Yo'q, bu emas", callback_data: `fb:${pTok}:n` },
     ]);
   }
 

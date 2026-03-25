@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { getDb } from './index';
 
 export type FeedbackSource = 'photo' | 'text';
@@ -31,6 +32,7 @@ export interface PendingFeedbackRow {
   confidence: string | null;
   photo_file_id: string | null;
   keyboard_keep_json: string | null;
+  feedback_token: string | null;
   created_at: number;
 }
 
@@ -42,46 +44,50 @@ function pruneExpiredPending(): void {
   d.prepare(`DELETE FROM pending_identification_feedback WHERE created_at < ?`).run(cutoff);
 }
 
-export function insertPendingFeedback(row: PendingFeedbackInsert): number {
+/** Telegram callback_data uchun noyob kalit (32 bayt hex, id emas) */
+export function insertPendingFeedback(row: PendingFeedbackInsert): string {
   pruneExpiredPending();
   const d = getDb();
   const now = Math.floor(Date.now() / 1000);
-  const r = d
-    .prepare(
-      `
+  const token = crypto.randomBytes(16).toString('hex');
+  d.prepare(
+    `
     INSERT INTO pending_identification_feedback (
       telegram_user_id, chat_id, source, predicted_title, predicted_uz_title,
-      tmdb_id, imdb_id, media_type, confidence, photo_file_id, keyboard_keep_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      tmdb_id, imdb_id, media_type, confidence, photo_file_id, keyboard_keep_json, feedback_token, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `
-    )
-    .run(
-      row.telegramUserId,
-      row.chatId,
-      row.source,
-      row.predictedTitle,
-      row.predictedUzTitle,
-      row.tmdbId,
-      row.imdbId,
-      row.mediaType,
-      row.confidence,
-      row.photoFileId,
-      row.keyboardKeepJson,
-      now
-    );
-  return Number(r.lastInsertRowid);
+  ).run(
+    row.telegramUserId,
+    row.chatId,
+    row.source,
+    row.predictedTitle,
+    row.predictedUzTitle,
+    row.tmdbId,
+    row.imdbId,
+    row.mediaType,
+    row.confidence,
+    row.photoFileId,
+    row.keyboardKeepJson,
+    token,
+    now
+  );
+  return token;
 }
 
-/** Faqat shu foydalanuvchiga tegishli bo‘lsa o‘chirib qaytaradi */
-export function consumePendingFeedback(
-  id: number,
-  telegramUserId: number
-): PendingFeedbackRow | null {
+/**
+ * callback_data kaliti: `feedback_token` (yangi) yoki eski `id` (faqat raqam).
+ * Ikkinchi bosish / noto‘g‘ri kalit — null.
+ */
+export function consumePendingFeedback(key: string, telegramUserId: number): PendingFeedbackRow | null {
   const d = getDb();
-  const row = d
-    .prepare(`SELECT * FROM pending_identification_feedback WHERE id = ?`)
-    .get(id) as PendingFeedbackRow | undefined;
+  const isLegacyId = /^\d{1,12}$/.test(key) && key.length < 20;
+  const row = (
+    isLegacyId
+      ? d.prepare(`SELECT * FROM pending_identification_feedback WHERE id = ?`).get(Number(key))
+      : d.prepare(`SELECT * FROM pending_identification_feedback WHERE feedback_token = ?`).get(key)
+  ) as PendingFeedbackRow | undefined;
   if (!row || row.telegram_user_id !== telegramUserId) return null;
-  d.prepare(`DELETE FROM pending_identification_feedback WHERE id = ?`).run(id);
+  d.prepare(`DELETE FROM pending_identification_feedback WHERE id = ?`).run(row.id);
   return row;
 }
