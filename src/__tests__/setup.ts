@@ -4,4 +4,3 @@ process.env.OMDB_API_KEY = 'test_omdb_key';
 process.env.SERPER_API_KEY = 'test_serper_key';
 process.env.GEMINI_API_KEY = 'test_gemini_key';
 process.env.BOT_TOKEN = 'test_bot_token';
-process.env.DB_PATH = ':memory:';

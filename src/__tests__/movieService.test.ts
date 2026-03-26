@@ -409,55 +409,67 @@ describe('identifyFromText — to\'liq pipeline', () => {
   });
 });
 
-// ─── 7. 12 soatlik limit — db/index.ts ───────────────────────────────────────
+// ─── 7. 12 soatlik limit — db/index.ts (Postgres, DATABASE_URL) ──────────────
 
-describe('12 soatlik limit — oyna reset ishlaydi', () => {
+const describeDb = process.env.DATABASE_URL ? describe : describe.skip;
+
+describeDb('12 soatlik limit — oyna reset ishlaydi', () => {
+  beforeAll(async () => {
+    const { initPostgresSchema } = await import('../db/postgres');
+    await initPostgresSchema();
+  });
+
   test('incrementUserRequests birinchi uch so\'rovda 1,2,3', async () => {
-    const { incrementUserRequests, upsertUser, getDb } = await import('../db');
-    getDb();
+    const { getPostgresPool } = await import('../db/postgres');
+    const { incrementUserRequests, upsertUser } = await import('../db');
+    const userId = 888_000_000_000 + Math.floor(Math.random() * 999_999_999);
+    await getPostgresPool().query(`DELETE FROM users WHERE telegram_id = $1`, [userId]);
+    await upsertUser(userId, 'testuser2', 'Test2');
 
-    const userId = 888888;
-    upsertUser(userId, 'testuser2', 'Test2');
-
-    let count = incrementUserRequests(userId);
+    let count = await incrementUserRequests(userId);
     expect(count).toBe(1);
 
-    count = incrementUserRequests(userId);
+    count = await incrementUserRequests(userId);
     expect(count).toBe(2);
 
-    count = incrementUserRequests(userId);
+    count = await incrementUserRequests(userId);
     expect(count).toBe(3);
 
-    count = incrementUserRequests(userId);
+    count = await incrementUserRequests(userId);
     expect(count).toBe(4);
     console.log(`[TUZATILDI] count=${count} — handler 4-chi urinishni oldin to\'xtatadi`);
   });
 
   test('12 soatdan keyin count 1 dan qayta boshlanadi', async () => {
-    const { getDb } = await import('../db');
-    const db = getDb();
-
-    const userId = 777777;
+    const { getPostgresPool } = await import('../db/postgres');
+    const pool = getPostgresPool();
+    const userId = 777_000_000_000 + Math.floor(Math.random() * 999_999_999);
+    await pool.query(`DELETE FROM users WHERE telegram_id = $1`, [userId]);
     const thirteenHoursAgo = Math.floor(Date.now() / 1000) - 13 * 3600;
-    db.prepare(`
-      INSERT OR REPLACE INTO users (telegram_id, username, first_name, request_count, last_request_at)
-      VALUES (?, 'window_user', 'Window', 100, ?)
-    `).run(userId, thirteenHoursAgo);
+    await pool.query(
+      `
+      INSERT INTO users (telegram_id, username, first_name, request_count, last_request_at)
+      VALUES ($1, 'window_user', 'Window', 100, $2)
+      ON CONFLICT (telegram_id) DO UPDATE SET
+        request_count = EXCLUDED.request_count,
+        last_request_at = EXCLUDED.last_request_at
+    `,
+      [userId, thirteenHoursAgo]
+    );
 
     const { incrementUserRequests } = await import('../db');
-    const count = incrementUserRequests(userId);
+    const count = await incrementUserRequests(userId);
     expect(count).toBe(1);
     console.log(`[TUZATILDI] 12 soatdan keyin birinchi so'rov count=${count}`);
   });
 
   test('unlimited Telegram id uchun increment hisobga qo\'shilmaydi', async () => {
-    const { incrementUserRequests, upsertUser, getWindowRequestCount, getDb } = await import('../db');
-    getDb();
-    const adminId = 5737309471;
-    upsertUser(adminId, 'admin', 'Admin');
-    expect(getWindowRequestCount(adminId)).toBe(0);
-    expect(incrementUserRequests(adminId)).toBe(0);
-    expect(incrementUserRequests(adminId)).toBe(0);
+    const { incrementUserRequests, upsertUser, getWindowRequestCount } = await import('../db');
+    const adminId = 5_737_309_471;
+    await upsertUser(adminId, 'admin', 'Admin');
+    expect(await getWindowRequestCount(adminId)).toBe(0);
+    expect(await incrementUserRequests(adminId)).toBe(0);
+    expect(await incrementUserRequests(adminId)).toBe(0);
   });
 });
 

@@ -34,10 +34,10 @@ export async function handlePhoto(ctx: Context): Promise<void> {
 
   if (!userId) return;
 
-  upsertUser(userId, username, firstName);
-  recordUserActivityDay(userId);
+  await upsertUser(userId, username, firstName);
+  await recordUserActivityDay(userId);
 
-  const photoGate = canUserSendPhoto(userId);
+  const photoGate = await canUserSendPhoto(userId);
   if (!photoGate.ok) {
     if (photoGate.reason === 'burst') {
       const m = Math.round(PHOTO_BURST_WINDOW_SECONDS / 60);
@@ -58,7 +58,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
     return;
   }
 
-  recordPhotoRequest(userId);
+  await recordPhotoRequest(userId);
 
   const processing = await ctx.reply('🔍 Qidirilmoqda...');
 
@@ -96,15 +96,15 @@ export async function handlePhoto(ctx: Context): Promise<void> {
       await ctx.api.editMessageText(
         ctx.chat!.id,
         processing.message_id,
-        '❌ Bu kadrdan filmni ishonchli aniqlay olmadim.\n\n' +
-          '📸 Yaxshiroq kadr yuboring: yuz va sahna aniq, kam watermark.\n' +
-          '✍️ Yoki filmni qisqacha tasvirlab yozing (nom, aktyor, yil) — matn orqali qidiraman.'
+        '❌ Bu rasmdan filmni aniqlay olmadim.\n\n' +
+          '📸 Yaxshiroq kadr yuboring: aktyor yuzi, va sahna aniq, imkonqadar sifatliroq rasm bo‘lsin.\n' +
+          '✍️ Yoki filmni qisqacha tasvirlab yozing (nima bo‘lyapti, qanday hodisani ko‘ryapsiz, qanday sahnalar) — matn orqali qidiraman.'
       );
       return;
     }
 
     // Cache tekshirish
-    const cached = getCached(identified.title);
+    const cached = await getCached(identified.title);
     let details: MovieDetails;
 
     if (cached) {
@@ -138,7 +138,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
         () => getMovieDetails(identified),
         { intervalMs: 2800 }
       );
-      setCache(identified.title, {
+      await setCache(identified.title, {
         title: details.title,
         uz_title: details.uzTitle,
         original_title: details.originalTitle,
@@ -155,7 +155,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
     await ctx.api.deleteMessage(chatId, msgId);
 
     const watchKb = buildWatchKeyboard(details);
-    const pendingToken = insertPendingFeedback({
+    const pendingToken = await insertPendingFeedback({
       telegramUserId: userId,
       chatId: ctx.chat!.id,
       source: 'photo',

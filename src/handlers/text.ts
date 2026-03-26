@@ -11,6 +11,8 @@ import {
 import { insertPendingFeedback } from '../db/feedbackPending';
 import { buildWatchKeyboard, sendMovieResult } from './photo';
 import { USER_REQUEST_LIMIT, isUnlimitedUser } from '../config/limits';
+import { extractInstagramReelUrl } from '../services/reelsUrl';
+import { handleInstagramReelUrl } from './reels';
 
 export async function handleText(ctx: Context): Promise<void> {
   const text = ctx.message?.text?.trim();
@@ -19,18 +21,24 @@ export async function handleText(ctx: Context): Promise<void> {
   const userId = ctx.from?.id;
   if (!userId) return;
 
-  upsertUser(userId, ctx.from?.username, ctx.from?.first_name);
-  recordUserActivityDay(userId);
+  await upsertUser(userId, ctx.from?.username, ctx.from?.first_name);
+  await recordUserActivityDay(userId);
+
+  const reelUrl = extractInstagramReelUrl(text);
+  if (reelUrl) {
+    await handleInstagramReelUrl(ctx, reelUrl);
+    return;
+  }
 
   if (!isUnlimitedUser(userId)) {
-    if (getWindowRequestCount(userId) >= USER_REQUEST_LIMIT) {
+    if ((await getWindowRequestCount(userId)) >= USER_REQUEST_LIMIT) {
       await ctx.reply(
         `⚠️ So'rov limiti tugadi (${USER_REQUEST_LIMIT} ta / 12 soat).\n` +
           '⏳ 12 soatdan keyin yana 3 ta ochiladi.'
       );
       return;
     }
-    incrementUserRequests(userId);
+    await incrementUserRequests(userId);
   }
 
   const processing = await ctx.reply('🔍 Qidirilmoqda...');
@@ -49,7 +57,7 @@ export async function handleText(ctx: Context): Promise<void> {
 
     await ctx.api.editMessageText(ctx.chat!.id, processing.message_id, `🎯 "${identified.title}" topildi! Yuklanmoqda...`);
 
-    const cached = getCached(identified.title);
+    const cached = await getCached(identified.title);
     let details;
 
     if (cached) {
@@ -69,7 +77,7 @@ export async function handleText(ctx: Context): Promise<void> {
       };
     } else {
       details = await getMovieDetails(identified);
-      setCache(identified.title, {
+      await setCache(identified.title, {
         title: details.title,
         uz_title: details.uzTitle,
         original_title: details.originalTitle,
@@ -85,7 +93,7 @@ export async function handleText(ctx: Context): Promise<void> {
     await ctx.api.deleteMessage(ctx.chat!.id, processing.message_id);
 
     const watchKb = buildWatchKeyboard(details);
-    const pendingToken = insertPendingFeedback({
+    const pendingToken = await insertPendingFeedback({
       telegramUserId: userId,
       chatId: ctx.chat!.id,
       source: 'text',

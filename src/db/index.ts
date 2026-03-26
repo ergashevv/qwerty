@@ -1,5 +1,3 @@
-import Database from 'better-sqlite3';
-import path from 'path';
 import crypto from 'crypto';
 import {
   REQUEST_WINDOW_SECONDS,
@@ -7,195 +5,13 @@ import {
   PHOTO_BURST_WINDOW_SECONDS,
   PHOTO_BURST_LIMIT,
   PHOTO_DAILY_LIMIT,
+  REELS_WINDOW_SECONDS,
+  REELS_LIMIT_PER_WINDOW,
 } from '../config/limits';
+import { getPostgresPool } from './postgres';
 
-const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), 'kinova.db');
-
-let db: Database.Database;
-
-export function getDb(): Database.Database {
-  if (!db) {
-    db = new Database(DB_PATH);
-    db.pragma('journal_mode = WAL');
-    db.pragma('foreign_keys = ON');
-    initSchema();
-  }
-  return db;
-}
-
-function initSchema() {
-  const d = getDb();
-  d.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      telegram_id   INTEGER PRIMARY KEY,
-      username      TEXT,
-      first_name    TEXT,
-      created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
-      request_count INTEGER NOT NULL DEFAULT 0,
-      last_request_at INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS movie_cache (
-      cache_key      TEXT PRIMARY KEY,
-      title          TEXT NOT NULL,
-      uz_title       TEXT,
-      original_title TEXT,
-      year           TEXT,
-      poster_url     TEXT,
-      plot_uz        TEXT,
-      watch_links    TEXT,
-      rating         TEXT,
-      imdb_url       TEXT,
-      created_at     INTEGER NOT NULL DEFAULT (unixepoch()),
-      hit_count      INTEGER NOT NULL DEFAULT 0
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_movie_cache_created ON movie_cache(created_at);
-
-    CREATE TABLE IF NOT EXISTS photo_requests (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      telegram_id INTEGER NOT NULL,
-      created_at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_photo_user_time ON photo_requests(telegram_id, created_at);
-
-    CREATE TABLE IF NOT EXISTS pending_identification_feedback (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      telegram_user_id INTEGER NOT NULL,
-      chat_id INTEGER NOT NULL,
-      source TEXT NOT NULL CHECK(source IN ('photo','text')),
-      predicted_title TEXT NOT NULL,
-      predicted_uz_title TEXT,
-      tmdb_id INTEGER,
-      imdb_id TEXT,
-      media_type TEXT,
-      confidence TEXT,
-      photo_file_id TEXT,
-      created_at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_pending_fb_user ON pending_identification_feedback(telegram_user_id);
-    CREATE INDEX IF NOT EXISTS idx_pending_fb_created ON pending_identification_feedback(created_at);
-
-    CREATE TABLE IF NOT EXISTS user_activity_day (
-      telegram_id INTEGER NOT NULL,
-      day_utc     TEXT NOT NULL,
-      PRIMARY KEY (telegram_id, day_utc)
-    );
-    CREATE INDEX IF NOT EXISTS idx_user_activity_day ON user_activity_day(day_utc);
-  `);
-  migrateAudienceSchema();
-  migratePendingFeedbackKeyboardColumn();
-  migratePendingFeedbackTokenColumn();
-}
-
-/** pending_identification_feedback: fikr tugmalari olingandan keyin qoladigan klaviatura */
-function migratePendingFeedbackKeyboardColumn(): void {
-  const d = getDb();
-  const cols = d.prepare(`PRAGMA table_info(pending_identification_feedback)`).all() as { name: string }[];
-  if (!cols.some((c) => c.name === 'keyboard_keep_json')) {
-    d.exec(`ALTER TABLE pending_identification_feedback ADD COLUMN keyboard_keep_json TEXT`);
-  }
-}
-
-/** Har bir natija uchun noyob callback kalit (id qayta ishlatilishi muammosiz) */
-function migratePendingFeedbackTokenColumn(): void {
-  const d = getDb();
-  const cols = d.prepare(`PRAGMA table_info(pending_identification_feedback)`).all() as { name: string }[];
-  if (!cols.some((c) => c.name === 'feedback_token')) {
-    d.exec(`ALTER TABLE pending_identification_feedback ADD COLUMN feedback_token TEXT`);
-    d.exec(
-      `CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_feedback_token ON pending_identification_feedback(feedback_token) WHERE feedback_token IS NOT NULL`
-    );
-  }
-}
-
-/** started_at va boshqa ustunlar — mavjud DB uchun */
-function migrateAudienceSchema(): void {
-  const d = getDb();
-  const cols = d.prepare(`PRAGMA table_info(users)`).all() as { name: string }[];
-  if (!cols.some((c) => c.name === 'started_at')) {
-    d.exec(`ALTER TABLE users ADD COLUMN started_at INTEGER`);
-  }
-}
-
-/** UTC sana YYYY-MM-DD — SQLite date('now') bilan mos */
 function utcDayString(): string {
   return new Date().toISOString().slice(0, 10);
-}
-
-/** Kunlik faollik (DAU/WAU/MAU) — har bir user/kun bir marta */
-export function recordUserActivityDay(telegramId: number): void {
-  const d = getDb();
-  const day = utcDayString();
-  d.prepare(`INSERT OR IGNORE INTO user_activity_day (telegram_id, day_utc) VALUES (?, ?)`).run(
-    telegramId,
-    day
-  );
-}
-
-/** Faqat /start bosilganda — birinchi marta started_at qo‘yiladi */
-export function markUserStarted(telegramId: number): void {
-  const d = getDb();
-  const now = Math.floor(Date.now() / 1000);
-  d.prepare(`UPDATE users SET started_at = COALESCE(started_at, ?) WHERE telegram_id = ?`).run(
-    now,
-    telegramId
-  );
-}
-
-export interface AudienceStats {
-  /** users jadvalidagi barcha (rasm/matn/start orqali yozilgan) */
-  totalUsers: number;
-  /** Kamida bir marta /start bosgan (started_at mavjud) */
-  usersStarted: number;
-  /** Bugun UTC bo‘yicha kamida 1 marta faol */
-  dau: number;
-  /** So‘nggi 7 kun (jumladan bugun) */
-  wau: number;
-  /** So‘nggi 30 kun */
-  mau: number;
-}
-
-export function getAudienceStats(): AudienceStats {
-  const d = getDb();
-  const totalUsers = (d.prepare(`SELECT COUNT(*) AS c FROM users`).get() as { c: number }).c;
-  const usersStarted = (
-    d.prepare(`SELECT COUNT(*) AS c FROM users WHERE started_at IS NOT NULL`).get() as { c: number }
-  ).c;
-  const dau = (
-    d
-      .prepare(
-        `SELECT COUNT(DISTINCT telegram_id) AS c FROM user_activity_day WHERE day_utc = date('now')`
-      )
-      .get() as { c: number }
-  ).c;
-  const wau = (
-    d
-      .prepare(
-        `SELECT COUNT(DISTINCT telegram_id) AS c FROM user_activity_day
-         WHERE day_utc >= date('now', '-6 days') AND day_utc <= date('now')`
-      )
-      .get() as { c: number }
-  ).c;
-  const mau = (
-    d
-      .prepare(
-        `SELECT COUNT(DISTINCT telegram_id) AS c FROM user_activity_day
-         WHERE day_utc >= date('now', '-29 days') AND day_utc <= date('now')`
-      )
-      .get() as { c: number }
-  ).c;
-  return { totalUsers, usersStarted, dau, wau, mau };
-}
-
-/** Juda eski kunlar — jadval hajmini cheklash (~1 yil) */
-export function pruneUserActivityHistory(): void {
-  try {
-    const d = getDb();
-    d.prepare(`DELETE FROM user_activity_day WHERE day_utc < date('now', '-400 days')`).run();
-  } catch {
-    /* ignore */
-  }
 }
 
 function utcDayStartUnix(): number {
@@ -204,34 +20,165 @@ function utcDayStartUnix(): number {
   return Math.floor(t / 1000);
 }
 
-/** Rasm yuborish: burst + kunlik limit (matn limitidan alohida) */
-export function canUserSendPhoto(telegramId: number): { ok: boolean; reason?: 'burst' | 'daily' } {
+export async function recordUserActivityDay(telegramId: number): Promise<void> {
+  const day = utcDayString();
+  await getPostgresPool().query(
+    `INSERT INTO user_activity_day (telegram_id, day_utc) VALUES ($1, $2::date) ON CONFLICT DO NOTHING`,
+    [telegramId, day]
+  );
+}
+
+export async function markUserStarted(telegramId: number): Promise<void> {
+  const pool = getPostgresPool();
+  const now = Math.floor(Date.now() / 1000);
+  await pool.query(
+    `UPDATE users SET started_at = COALESCE(started_at, $1::bigint) WHERE telegram_id = $2`,
+    [now, telegramId]
+  );
+}
+
+export interface AudienceStats {
+  totalUsers: number;
+  usersStarted: number;
+  dau: number;
+  wau: number;
+  mau: number;
+}
+
+export async function getAudienceStats(): Promise<AudienceStats> {
+  const pool = getPostgresPool();
+  /** Kunlik = bugungi UTC kun; haftalik = joriy hafta (dushanbadan bugungacha, UTC); oylik = joriy oy (1-kundan bugungacha, UTC). */
+  const r = await pool.query(`
+    WITH bounds AS (
+      SELECT
+        (now() AT TIME ZONE 'utc')::date AS today_utc,
+        (date_trunc('week', (now() AT TIME ZONE 'utc')::timestamp))::date AS week_start_utc,
+        (date_trunc('month', (now() AT TIME ZONE 'utc')::timestamp))::date AS month_start_utc
+    )
+    SELECT
+      (SELECT COUNT(*)::int FROM users) AS total_users,
+      (SELECT COUNT(*)::int FROM users WHERE started_at IS NOT NULL) AS users_started,
+      (SELECT COUNT(DISTINCT uad.telegram_id)::int
+       FROM user_activity_day uad, bounds b
+       WHERE uad.day_utc = b.today_utc) AS dau,
+      (SELECT COUNT(DISTINCT uad.telegram_id)::int
+       FROM user_activity_day uad, bounds b
+       WHERE uad.day_utc >= b.week_start_utc AND uad.day_utc <= b.today_utc) AS wau,
+      (SELECT COUNT(DISTINCT uad.telegram_id)::int
+       FROM user_activity_day uad, bounds b
+       WHERE uad.day_utc >= b.month_start_utc AND uad.day_utc <= b.today_utc) AS mau
+  `);
+  const row = r.rows[0] as {
+    total_users: number;
+    users_started: number;
+    dau: number;
+    wau: number;
+    mau: number;
+  };
+  return {
+    totalUsers: Number(row.total_users ?? 0),
+    usersStarted: Number(row.users_started ?? 0),
+    dau: Number(row.dau ?? 0),
+    wau: Number(row.wau ?? 0),
+    mau: Number(row.mau ?? 0),
+  };
+}
+
+export async function pruneUserActivityHistory(): Promise<void> {
+  try {
+    await getPostgresPool().query(`
+      DELETE FROM user_activity_day
+      WHERE day_utc < (now() AT TIME ZONE 'utc')::date - 400
+    `);
+  } catch {
+    /* ignore */
+  }
+}
+
+export async function canUserSendPhoto(
+  telegramId: number
+): Promise<{ ok: boolean; reason?: 'burst' | 'daily' }> {
   if (isUnlimitedUser(telegramId)) return { ok: true };
 
-  const d = getDb();
+  const pool = getPostgresPool();
   const now = Math.floor(Date.now() / 1000);
   const burstSince = now - PHOTO_BURST_WINDOW_SECONDS;
 
-  const burstRow = d
-    .prepare(`SELECT COUNT(*) AS c FROM photo_requests WHERE telegram_id = ? AND created_at >= ?`)
-    .get(telegramId, burstSince) as { c: number };
-  if (burstRow.c >= PHOTO_BURST_LIMIT) return { ok: false, reason: 'burst' };
+  const burstRow = await pool.query(
+    `SELECT COUNT(*)::int AS c FROM photo_requests WHERE telegram_id = $1 AND created_at >= $2`,
+    [telegramId, burstSince]
+  );
+  if (Number(burstRow.rows[0]?.c ?? 0) >= PHOTO_BURST_LIMIT) return { ok: false, reason: 'burst' };
 
   const dayStart = utcDayStartUnix();
-  const dayRow = d
-    .prepare(`SELECT COUNT(*) AS c FROM photo_requests WHERE telegram_id = ? AND created_at >= ?`)
-    .get(telegramId, dayStart) as { c: number };
-  if (dayRow.c >= PHOTO_DAILY_LIMIT) return { ok: false, reason: 'daily' };
+  const dayRow = await pool.query(
+    `SELECT COUNT(*)::int AS c FROM photo_requests WHERE telegram_id = $1 AND created_at >= $2`,
+    [telegramId, dayStart]
+  );
+  if (Number(dayRow.rows[0]?.c ?? 0) >= PHOTO_DAILY_LIMIT) return { ok: false, reason: 'daily' };
 
   return { ok: true };
 }
 
-export function recordPhotoRequest(telegramId: number): void {
-  const d = getDb();
+export async function recordPhotoRequest(telegramId: number): Promise<void> {
+  const pool = getPostgresPool();
   const now = Math.floor(Date.now() / 1000);
-  d.prepare(`INSERT INTO photo_requests (telegram_id, created_at) VALUES (?, ?)`).run(telegramId, now);
+  await pool.query(`INSERT INTO photo_requests (telegram_id, created_at) VALUES ($1, $2)`, [telegramId, now]);
   const old = now - 4 * 24 * 60 * 60;
-  d.prepare(`DELETE FROM photo_requests WHERE created_at < ?`).run(old);
+  await pool.query(`DELETE FROM photo_requests WHERE created_at < $1`, [old]);
+}
+
+export async function canUserReels(telegramId: number): Promise<boolean> {
+  if (isUnlimitedUser(telegramId)) return true;
+  const pool = getPostgresPool();
+  const now = Math.floor(Date.now() / 1000);
+  const since = now - REELS_WINDOW_SECONDS;
+  const r = await pool.query(
+    `SELECT COUNT(*)::int AS c FROM reels_requests WHERE telegram_id = $1 AND created_at >= $2`,
+    [telegramId, since]
+  );
+  return Number(r.rows[0]?.c ?? 0) < REELS_LIMIT_PER_WINDOW;
+}
+
+export async function recordReelsRequest(telegramId: number): Promise<void> {
+  const pool = getPostgresPool();
+  const now = Math.floor(Date.now() / 1000);
+  await pool.query(`INSERT INTO reels_requests (telegram_id, created_at) VALUES ($1, $2)`, [telegramId, now]);
+  const old = now - 8 * 24 * 60 * 60;
+  await pool.query(`DELETE FROM reels_requests WHERE created_at < $1`, [old]);
+}
+
+/**
+ * Reels limitini parallel so‘rovlarda buzmaslik uchun: users qatorini FOR UPDATE bilan qulflash + slot tekshiruvi.
+ */
+export async function tryReserveReelsSlot(telegramId: number): Promise<boolean> {
+  if (isUnlimitedUser(telegramId)) return true;
+
+  const client = await getPostgresPool().connect();
+  const now = Math.floor(Date.now() / 1000);
+  const since = now - REELS_WINDOW_SECONDS;
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT 1 FROM users WHERE telegram_id = $1 FOR UPDATE`, [telegramId]);
+    const r = await client.query(
+      `SELECT COUNT(*)::int AS c FROM reels_requests WHERE telegram_id = $1 AND created_at >= $2`,
+      [telegramId, since]
+    );
+    if (Number(r.rows[0]?.c ?? 0) >= REELS_LIMIT_PER_WINDOW) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+    await client.query(`INSERT INTO reels_requests (telegram_id, created_at) VALUES ($1, $2)`, [telegramId, now]);
+    await client.query('COMMIT');
+    const old = now - 8 * 24 * 60 * 60;
+    await getPostgresPool().query(`DELETE FROM reels_requests WHERE created_at < $1`, [old]);
+    return true;
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 export function cacheKey(title: string): string {
@@ -254,93 +201,150 @@ export interface MovieCacheEntry {
   imdb_url?: string;
 }
 
-const CACHE_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 kun
+const CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
 
-export function getCached(title: string): MovieCacheEntry | null {
-  const d = getDb();
+export async function getCached(title: string): Promise<MovieCacheEntry | null> {
+  const pool = getPostgresPool();
   const key = cacheKey(title);
-  const row = d
-    .prepare(
-      `SELECT * FROM movie_cache WHERE cache_key = ? AND (unixepoch() - created_at) < ?`
-    )
-    .get(key, CACHE_TTL_SECONDS) as MovieCacheEntry & { cache_key: string; hit_count: number } | undefined;
-
+  const now = Math.floor(Date.now() / 1000);
+  const r = await pool.query(
+    `SELECT cache_key, title, uz_title, original_title, year, poster_url, plot_uz, watch_links, rating, imdb_url, hit_count
+     FROM movie_cache
+     WHERE cache_key = $1 AND ($2 - created_at) < $3`,
+    [key, now, CACHE_TTL_SECONDS]
+  );
+  const row = r.rows[0] as
+    | (MovieCacheEntry & { cache_key: string; hit_count: number; watch_links: string | null })
+    | undefined;
   if (!row) return null;
 
-  d.prepare(`UPDATE movie_cache SET hit_count = hit_count + 1 WHERE cache_key = ?`).run(key);
+  await pool.query(`UPDATE movie_cache SET hit_count = hit_count + 1 WHERE cache_key = $1`, [key]);
   return row;
 }
 
-export function setCache(title: string, data: MovieCacheEntry): void {
-  const d = getDb();
+export async function setCache(title: string, data: MovieCacheEntry): Promise<void> {
+  const pool = getPostgresPool();
   const key = cacheKey(title);
-  d.prepare(`
-    INSERT OR REPLACE INTO movie_cache
-      (cache_key, title, uz_title, original_title, year, poster_url, plot_uz, watch_links, rating, imdb_url, created_at, hit_count)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), 0)
-  `).run(
-    key,
-    data.title,
-    data.uz_title ?? null,
-    data.original_title ?? null,
-    data.year ?? null,
-    data.poster_url ?? null,
-    data.plot_uz ?? null,
-    data.watch_links ?? null,
-    data.rating ?? null,
-    data.imdb_url ?? null,
+  const now = Math.floor(Date.now() / 1000);
+  await pool.query(
+    `
+    INSERT INTO movie_cache (
+      cache_key, title, uz_title, original_title, year, poster_url, plot_uz, watch_links, rating, imdb_url, created_at, hit_count
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0)
+    ON CONFLICT (cache_key) DO UPDATE SET
+      title = EXCLUDED.title,
+      uz_title = EXCLUDED.uz_title,
+      original_title = EXCLUDED.original_title,
+      year = EXCLUDED.year,
+      poster_url = EXCLUDED.poster_url,
+      plot_uz = EXCLUDED.plot_uz,
+      watch_links = EXCLUDED.watch_links,
+      rating = EXCLUDED.rating,
+      imdb_url = EXCLUDED.imdb_url,
+      created_at = EXCLUDED.created_at,
+      hit_count = 0
+  `,
+    [
+      key,
+      data.title,
+      data.uz_title ?? null,
+      data.original_title ?? null,
+      data.year ?? null,
+      data.poster_url ?? null,
+      data.plot_uz ?? null,
+      data.watch_links ?? null,
+      data.rating ?? null,
+      data.imdb_url ?? null,
+      now,
+    ]
   );
 }
 
-export function upsertUser(telegramId: number, username?: string, firstName?: string): void {
-  const d = getDb();
-  d.prepare(`
+export async function upsertUser(telegramId: number, username?: string, firstName?: string): Promise<void> {
+  await getPostgresPool().query(
+    `
     INSERT INTO users (telegram_id, username, first_name, request_count, last_request_at)
-    VALUES (?, ?, ?, 0, NULL)
-    ON CONFLICT(telegram_id) DO UPDATE SET
-      username = excluded.username,
-      first_name = excluded.first_name
-  `).run(telegramId, username ?? null, firstName ?? null);
+    VALUES ($1, $2, $3, 0, NULL)
+    ON CONFLICT (telegram_id) DO UPDATE SET
+      username = EXCLUDED.username,
+      first_name = EXCLUDED.first_name
+  `,
+    [telegramId, username ?? null, firstName ?? null]
+  );
 }
 
-export function incrementUserRequests(telegramId: number): number {
+export async function incrementUserRequests(telegramId: number): Promise<number> {
   if (isUnlimitedUser(telegramId)) return 0;
 
-  const d = getDb();
-  // So'nggi so'rovdan 12 soat o'tgan bo'lsa — yangi oyna, count=1
-  d.prepare(`
+  const pool = getPostgresPool();
+  await pool.query(
+    `
     UPDATE users SET
       request_count = CASE
         WHEN last_request_at IS NULL THEN 1
-        WHEN (unixepoch() - last_request_at) >= ? THEN 1
+        WHEN (FLOOR(EXTRACT(EPOCH FROM NOW()))::bigint - last_request_at) >= $1 THEN 1
         ELSE request_count + 1
       END,
-      last_request_at = unixepoch()
-    WHERE telegram_id = ?
-  `).run(REQUEST_WINDOW_SECONDS, telegramId);
-  const row = d.prepare(`SELECT request_count FROM users WHERE telegram_id = ?`).get(telegramId) as { request_count: number } | undefined;
-  return row?.request_count ?? 1;
+      last_request_at = FLOOR(EXTRACT(EPOCH FROM NOW()))::bigint
+    WHERE telegram_id = $2
+  `,
+    [REQUEST_WINDOW_SECONDS, telegramId]
+  );
+  const row = await pool.query(`SELECT request_count FROM users WHERE telegram_id = $1`, [telegramId]);
+  return Number((row.rows[0] as { request_count: number } | undefined)?.request_count ?? 1);
 }
 
-/**
- * Joriy oynadagi ishlatilgan so'rovlar (increment bilan bir xil qoida).
- * Vaqt: faqat SQLite unixepoch() — Node Date.now() bilan farq bo'lib qolmaydi.
- */
-export function getWindowRequestCount(telegramId: number): number {
+export async function getWindowRequestCount(telegramId: number): Promise<number> {
   if (isUnlimitedUser(telegramId)) return 0;
-  const d = getDb();
-  const row = d.prepare(`
+  const pool = getPostgresPool();
+  const r = await pool.query(
+    `
     SELECT CASE
       WHEN last_request_at IS NULL THEN 0
-      WHEN (unixepoch() - last_request_at) >= ? THEN 0
+      WHEN (FLOOR(EXTRACT(EPOCH FROM NOW()))::bigint - last_request_at) >= $1 THEN 0
       ELSE request_count
     END AS effective
-    FROM users WHERE telegram_id = ?
-  `).get(REQUEST_WINDOW_SECONDS, telegramId) as { effective: number } | undefined;
-  return row?.effective ?? 0;
+    FROM users WHERE telegram_id = $2
+  `,
+    [REQUEST_WINDOW_SECONDS, telegramId]
+  );
+  return Number((r.rows[0] as { effective: number } | undefined)?.effective ?? 0);
 }
 
-/** @deprecated getWindowRequestCount ishlating */
-export function getTodayRequestCount(telegramId: number): number {
+export function getTodayRequestCount(telegramId: number): Promise<number> {
   return getWindowRequestCount(telegramId);
+}
+
+export async function getAdminStatsSnapshot(): Promise<{
+  cacheCount: number;
+  topFilms: { title: string; hit_count: number }[];
+  totalRequests: number;
+}> {
+  const pool = getPostgresPool();
+  const [c, films, sum] = await Promise.all([
+    pool.query(`SELECT COUNT(*)::int AS c FROM movie_cache`),
+    pool.query(`SELECT title, hit_count FROM movie_cache ORDER BY hit_count DESC LIMIT 5`),
+    pool.query(`SELECT COALESCE(SUM(request_count), 0)::bigint AS s FROM users`),
+  ]);
+  return {
+    cacheCount: Number(c.rows[0]?.c ?? 0),
+    topFilms: films.rows as { title: string; hit_count: number }[],
+    totalRequests: Number(sum.rows[0]?.s ?? 0),
+  };
+}
+
+/** Inline fikr: Ha / Yo‘q — analytics_events (30+ kunlik yozuvlar avtomatik o‘chiriladi) */
+export async function getIdentificationFeedbackStats(): Promise<{ yes: number; no: number }> {
+  const pool = getPostgresPool();
+  const r = await pool.query(`
+    SELECT
+      COUNT(*) FILTER (WHERE (metadata->>'correct')::boolean = true)::int AS yes,
+      COUNT(*) FILTER (WHERE (metadata->>'correct')::boolean = false)::int AS no
+    FROM analytics_events
+    WHERE event_type = 'identification_feedback'
+  `);
+  return {
+    yes: Number(r.rows[0]?.yes ?? 0),
+    no: Number(r.rows[0]?.no ?? 0),
+  };
 }

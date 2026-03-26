@@ -310,17 +310,17 @@ function dashboardPage(data: Awaited<ReturnType<typeof loadDashboardPayload>>, l
         '</div>' + pill + '</div>';
     })();
     document.getElementById('metricsAct').innerHTML = [
-      ['DAU — bugun', data.dau ?? 0, 'Bugun UTC bo‘yicha kamida bitta faollik'],
-      ['WAU — 7 kun', data.wau ?? 0, 'So‘nggi 7 kun ichida faol foydalanuvchilar'],
-      ['MAU — 30 kun', data.mau ?? 0, 'So‘nggi 30 kun ichida faol'],
+      ['DAU — bugun', data.dau ?? 0, 'Bugungi UTC kunda kamida bitta faollik'],
+      ['WAU — joriy hafta', data.wau ?? 0, 'Joriy UTC hafta (dushanba — bugun) ichida faol'],
+      ['MAU — joriy oy', data.mau ?? 0, 'Joriy UTC oy (1-kun — bugun) ichida faol'],
     ].map(function (x) { return kpi(x[0], x[1], x[2]); }).join('');
     document.getElementById('metricsUsers').innerHTML = [
-      ['Jami (SQLite)', data.users, 'start / matn / rasm — alohida odam'],
-      ['/start bosgan', data.usersStarted ?? 0, 'bir marta ham /start'],
+      ['Jami (Postgres)', data.users, 'Neon — users jadvali'],
+      ['/start bosgan', data.usersStarted ?? 0, 'started_at mavjud'],
     ].map(function (x) { return kpi(x[0], x[1], x[2]); }).join('');
     document.getElementById('metricsUsage').innerHTML = [
-      ['Screenshotlar (jami)', data.photoTotal, 'photo_requests'],
-      ['Matn so‘rovlari (yig‘indi)', data.textSum, 'request_count yig‘indisi'],
+      ['Screenshotlar (jami)', data.photoTotal, 'photo_requests (so‘nggi ~4 kun serverda saqlanadi)'],
+      ['Matn so‘rovlari (yig‘indi)', data.textSum, 'SUM(request_count) — users'],
     ].map(function (x) { return kpi(x[0], x[1], x[2]); }).join('');
 
     const tickColor = 'rgba(200,210,225,.75)';

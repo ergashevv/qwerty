@@ -13,14 +13,14 @@
     "test": "jest --verbose --selectProjects unit --forceExit",
     "test:integration": "jest --verbose --selectProjects integration --forceExit",
     "test:all": "jest --verbose --forceExit",
-    "test:watch": "jest --watch --selectProjects unit"
+    "test:watch": "jest --watch --selectProjects unit",
+    "migrate:sqlite": "ts-node --transpile-only scripts/migrate-sqlite-to-pg.ts"
   },
   "dependencies": {
     "@aws-sdk/client-rekognition": "^3.750.0",
     "@google/generative-ai": "^0.21.0",
     "@grammyjs/runner": "^2.0.3",
     "axios": "^1.7.9",
-    "better-sqlite3": "^11.8.1",
     "dotenv": "^16.4.7",
     "express": "^5.2.1",
     "express-session": "^1.19.0",
@@ -31,6 +31,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
     "@types/express": "^5.0.6",
+    "better-sqlite3": "^11.8.1",
     "@types/express-session": "^1.18.2",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.13.10",

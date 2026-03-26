@@ -16,6 +16,12 @@ export const PHOTO_BURST_LIMIT = parseInt(process.env.PHOTO_BURST_LIMIT || '6', 
 /** Kuniga maksimal rasm (spam oldini olish) */
 export const PHOTO_DAILY_LIMIT = parseInt(process.env.PHOTO_DAILY_LIMIT || '80', 10);
 
+/** Instagram Reels: har bir foydalanuvchi uchun oyna (sekund) — default 6 soat */
+export const REELS_WINDOW_SECONDS = parseInt(process.env.REELS_WINDOW_SECONDS || String(6 * 60 * 60), 10);
+
+/** Shu oynada maksimal Reels qidiruv (har urinish hisoblanadi) */
+export const REELS_LIMIT_PER_WINDOW = parseInt(process.env.REELS_LIMIT_PER_WINDOW || '2', 10);
+
 /**
  * Cheksiz limit — vergul bilan ajratilgan Telegram user id lar.
  * Env: UNLIMITED_TELEGRAM_IDS=123,456

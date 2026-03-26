@@ -3,21 +3,24 @@
  * Bot: `npm start` / `npm run dev` — `src/bot.ts`
  */
 import 'dotenv/config';
-import { getDb, pruneUserActivityHistory } from '../db';
+import { pruneUserActivityHistory } from '../db';
 import { initPostgresSchema, pingPostgres, runAnalyticsRetention } from '../db/postgres';
 import { startDashboard } from './server';
 
-getDb();
-pruneUserActivityHistory();
-console.log('✅ SQLite tayyor (dashboard)');
+if (!process.env.DATABASE_URL?.trim()) {
+  console.error('❌ DATABASE_URL majburiy — dashboard faqat Neon Postgres bilan ishlaydi.');
+  process.exit(1);
+}
 
 void (async () => {
   try {
     await initPostgresSchema();
-    if (await pingPostgres()) console.log('✅ Postgres (Neon) ulanishi OK');
+    await pruneUserActivityHistory();
+    if (await pingPostgres()) console.log('✅ Postgres (Neon) tayyor (dashboard)');
     await runAnalyticsRetention();
   } catch (e) {
-    console.warn('⚠️ Postgres (DATABASE_URL):', (e as Error).message);
+    console.error('❌ Postgres:', (e as Error).message);
+    process.exit(1);
   }
   startDashboard();
 })();

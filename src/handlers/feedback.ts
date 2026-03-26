@@ -29,7 +29,7 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
     return;
   }
 
-  const row = consumePendingFeedback(keyPart, uid);
+  const row = await consumePendingFeedback(keyPart, uid);
   if (!row) {
     /** Ikkinchi bosish, eski xabar yoki boshqa user — ogohlantirishsiz */
     await ctx.answerCallbackQuery({ text: 'Qabul qilingan' });
