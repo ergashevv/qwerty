@@ -26,6 +26,7 @@ import {
   STATUS_IDENTIFY_LINES,
   withRotatingStatus,
 } from './rotatingStatus';
+import { maybeDonateAfterSuccess } from './donatePrompt';
 
 export async function handlePhoto(ctx: Context): Promise<void> {
   const userId  = ctx.from?.id;
@@ -251,6 +252,8 @@ export async function sendMovieResult(
       reply_markup: replyMarkup,
     });
   }
+
+  await maybeDonateAfterSuccess(ctx).catch(() => {});
 }
 
 function escHtml(text: string): string {

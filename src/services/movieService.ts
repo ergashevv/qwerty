@@ -624,6 +624,21 @@ export async function identifyMovie(base64: string, mimeType: string): Promise<M
 
   console.log(`Nomzodlar tartibi (tasdiq): ${ordered.map((c) => c.title).join(' → ') || '—'}`);
 
+  /**
+   * Rekognition (yuz) va Vision ikkalasi ham bir xil filmni ko‘rsatsa — bu mustaqil konsensus.
+   * Keyingi bosqichdagi geminiVerify aynan shu kadrlarda tez-tez false negative beradi (xuddi rasm, turli marta rad).
+   * Shuning uchun konsensusda Gemini verify o‘tkazilmaydi.
+   */
+  if (faces?.title && vision?.title && titlesMatch(faces.title, vision.title)) {
+    const consensus: MovieIdentified = {
+      title: faces.title,
+      type: faces.type ?? vision.type,
+      confidence: faces.confidence ?? vision.confidence,
+    };
+    console.log('✅ faces+vision konsensus — Gemini verify o‘tkazilmaydi:', consensus.title);
+    return consensus;
+  }
+
   const MAX_VERIFY = 8;
   for (let i = 0; i < Math.min(ordered.length, MAX_VERIFY); i++) {
     const cand = ordered[i];

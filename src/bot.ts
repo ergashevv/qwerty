@@ -13,6 +13,7 @@ import {
 } from './db';
 import { initPostgresSchema, pingPostgres, runAnalyticsRetention } from './db/postgres';
 import { handleIdentificationFeedback } from './handlers/feedback';
+import { handleDonateCallback } from './handlers/donatePrompt';
 
 const _botToken = process.env.BOT_TOKEN;
 if (!_botToken) {
@@ -121,6 +122,10 @@ async function bootstrap(): Promise<void> {
   });
 
   bot.on('message:text', handleText);
+
+  bot.callbackQuery(/^donate:/, async (ctx) => {
+    await handleDonateCallback(ctx);
+  });
 
   bot.callbackQuery(/^fb:/, async (ctx) => {
     await handleIdentificationFeedback(ctx);

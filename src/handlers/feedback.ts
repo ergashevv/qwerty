@@ -2,6 +2,7 @@ import { Context } from 'grammy';
 import type { InlineKeyboardMarkup } from 'grammy/types';
 import { insertAnalyticsEvent } from '../db/postgres';
 import { consumePendingFeedback } from '../db/feedbackPending';
+import { maybeDonateAfterFeedbackYes } from './donatePrompt';
 
 const PREFIX = 'fb:';
 
@@ -68,4 +69,8 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
     telegram_user_id: row.telegram_user_id,
     ...(correct ? {} : { photo_file_id: row.photo_file_id ?? null }),
   });
+
+  if (correct) {
+    await maybeDonateAfterFeedbackYes(ctx).catch(() => {});
+  }
 }

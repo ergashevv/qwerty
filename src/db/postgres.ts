@@ -152,6 +152,44 @@ export async function initPostgresSchema(): Promise<void> {
     EXCEPTION WHEN duplicate_object THEN NULL;
     END $$
   `);
+
+  /** Donate prompt: hisoblagichlar va milestone kuzatuv */
+  await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE users ADD COLUMN positive_feedback_total INTEGER NOT NULL DEFAULT 0;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `);
+  await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE users ADD COLUMN successful_ident_total INTEGER NOT NULL DEFAULT 0;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `);
+  await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE users ADD COLUMN last_donate_prompt_at TIMESTAMPTZ NULL;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `);
+  await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE users ADD COLUMN donate_prompt_opt_out BOOLEAN NOT NULL DEFAULT FALSE;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `);
+  await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE users ADD COLUMN donate_last_feedback_milestone INTEGER NOT NULL DEFAULT 0;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `);
+  await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE users ADD COLUMN donate_last_success_milestone INTEGER NOT NULL DEFAULT 0;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `);
 }
 
 export async function withPgClient<T>(fn: (c: PoolClient) => Promise<T>): Promise<T | null> {
