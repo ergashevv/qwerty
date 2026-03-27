@@ -15,6 +15,10 @@ export interface PendingFeedbackInsert {
   confidence: string | null;
   photoFileId: string | null;
   keyboardKeepJson: string | null;
+  /** Faqat source=text: foydalanuvchi yozgan matn */
+  userQueryText?: string | null;
+  /** Faqat source=text: bot qaytargan mazmun (qisqa) */
+  botReplyPreview?: string | null;
 }
 
 export interface PendingFeedbackRow {
@@ -32,6 +36,8 @@ export interface PendingFeedbackRow {
   keyboard_keep_json: string | null;
   feedback_token: string | null;
   created_at: number;
+  user_query_text: string | null;
+  bot_reply_preview: string | null;
 }
 
 const PENDING_TTL_SEC = 7 * 24 * 60 * 60;
@@ -49,8 +55,9 @@ export async function insertPendingFeedback(row: PendingFeedbackInsert): Promise
     `
     INSERT INTO pending_identification_feedback (
       telegram_user_id, chat_id, source, predicted_title, predicted_uz_title,
-      tmdb_id, imdb_id, media_type, confidence, photo_file_id, keyboard_keep_json, feedback_token, created_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      tmdb_id, imdb_id, media_type, confidence, photo_file_id, keyboard_keep_json, feedback_token, created_at,
+      user_query_text, bot_reply_preview
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
   `,
     [
       row.telegramUserId,
@@ -66,6 +73,8 @@ export async function insertPendingFeedback(row: PendingFeedbackInsert): Promise
       row.keyboardKeepJson,
       token,
       now,
+      row.userQueryText ?? null,
+      row.botReplyPreview ?? null,
     ]
   );
   return token;
@@ -100,5 +109,7 @@ export async function consumePendingFeedback(key: string, telegramUserId: number
     keyboard_keep_json: raw.keyboard_keep_json,
     feedback_token: raw.feedback_token,
     created_at: Number(raw.created_at),
+    user_query_text: raw.user_query_text != null ? String(raw.user_query_text) : null,
+    bot_reply_preview: raw.bot_reply_preview != null ? String(raw.bot_reply_preview) : null,
   };
 }

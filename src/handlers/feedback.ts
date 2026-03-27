@@ -2,6 +2,7 @@ import { Context } from 'grammy';
 import type { InlineKeyboardMarkup } from 'grammy/types';
 import { insertAnalyticsEvent } from '../db/postgres';
 import { consumePendingFeedback } from '../db/feedbackPending';
+import { tryBuildFeedbackThumbB64 } from '../services/feedbackThumb';
 import { maybeDonateAfterFeedbackYes } from './donatePrompt';
 
 const PREFIX = 'fb:';
@@ -57,6 +58,8 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
     await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } }).catch(() => {});
   }
 
+  const dashboardThumbB64 = await tryBuildFeedbackThumbB64(ctx, row.photo_file_id);
+
   await insertAnalyticsEvent('identification_feedback', {
     correct,
     source: row.source,
@@ -67,7 +70,14 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
     media_type: row.media_type ?? null,
     confidence: row.confidence ?? null,
     telegram_user_id: row.telegram_user_id,
-    ...(correct ? {} : { photo_file_id: row.photo_file_id ?? null }),
+    photo_file_id: row.photo_file_id ?? null,
+    ...(dashboardThumbB64 ? { dashboard_thumb_b64: dashboardThumbB64 } : {}),
+    ...(row.source === 'text' && (row.user_query_text || row.bot_reply_preview)
+      ? {
+          user_query_text: row.user_query_text ?? null,
+          bot_reply_preview: row.bot_reply_preview ?? null,
+        }
+      : {}),
   });
 
   if (correct) {

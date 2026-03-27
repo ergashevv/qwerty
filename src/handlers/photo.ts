@@ -6,6 +6,7 @@ import {
   getMovieDetails,
   MovieDetails,
   imdbIdFromMovieUrl,
+  cacheEntryMatchesIdentified,
 } from '../services/movieService';
 import {
   getCached,
@@ -108,7 +109,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
     const cached = await getCached(identified.title);
     let details: MovieDetails;
 
-    if (cached) {
+    if (cached && cacheEntryMatchesIdentified(identified, cached)) {
       await ctx.api.editMessageText(
         chatId,
         msgId,
@@ -192,10 +193,14 @@ export function buildWatchKeyboard(details: MovieDetails): InlineKeyboardButton[
   }
 
   if (rows.length === 0) {
+    const q =
+      (details.originalTitle && details.originalTitle.trim()) ||
+      details.title ||
+      details.uzTitle;
     rows.push([
       {
         text: '🔍 Google da qidirish',
-        url: `https://www.google.com/search?q=${encodeURIComponent(details.uzTitle + " o'zbek tilida tomosha")}`,
+        url: `https://www.google.com/search?q=${encodeURIComponent(`${q} o'zbek tilida`)}`,
       },
     ]);
   }
@@ -208,14 +213,14 @@ export async function sendMovieResult(
   details: MovieDetails,
   opts?: { pendingFeedbackToken?: string }
 ): Promise<void> {
-  const title    = details.uzTitle !== details.title ? details.uzTitle : details.title;
-  const origLine = details.originalTitle && details.originalTitle !== details.title
-    ? `\n📽 Asl nomi: <b>${escHtml(details.originalTitle)}</b>` : '';
+  const mainTitle = details.title || details.originalTitle || details.uzTitle;
+  const uzLine = details.uzTitle && details.uzTitle !== mainTitle
+    ? `\n📽 O'zbekcha: <b>${escHtml(details.uzTitle)}</b>` : '';
   const yearLine  = details.year ? ` | 📅 ${details.year}` : '';
   const ratingLine = details.rating !== 'N/A' ? ` | ⭐ ${details.rating}/10` : '';
 
   const caption = [
-    `🎬 <b>${escHtml(title)}</b>${origLine}`,
+    `🎬 <b>${escHtml(mainTitle)}</b>${uzLine}`,
     `${yearLine}${ratingLine}`.trim(),
     ``,
     `📖 ${escHtml(details.plotUz.slice(0, 300))}${details.plotUz.length > 300 ? '...' : ''}`,

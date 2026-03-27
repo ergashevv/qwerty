@@ -265,9 +265,7 @@ describe('tmdbSearch — mocked', () => {
     expect(result).toBeNull();
   });
 
-  test('[ESLATMA] tmdbSearch o\'zi hali ham birinchi natijani qaytaradi (identifyFromText tekshiradi)', async () => {
-    // tmdbSearch funksiyasi TMDB API dan birinchi natijani qaytaradi
-    // Tekshirish identifyFromText da titlesMatch orqali amalga oshiriladi
+  test('tmdbSearch multi: ro‘yxatda mos keladigan sarlavhani afzal ko‘radi (birinchi emas)', async () => {
     mockedAxios.get.mockResolvedValueOnce({
       data: {
         results: [
@@ -278,10 +276,7 @@ describe('tmdbSearch — mocked', () => {
     });
 
     const result = await tmdbSearch('Incendies');
-    // tmdbSearch hali ham birinchi natijani qaytaradi — bu expected behavior
-    // identifyFromText esa titlesMatch bilan bu natijani filtr qiladi (Gemini LLM)
-    expect(result?.result.title).toBe('Completely Different Movie');
-    console.log(`[ESLATMA] tmdbSearch birinchi natija qaytaradi, identifyFromText tekshiradi`);
+    expect(result?.result.title).toBe('Incendies');
   });
 
   test('o\'zbekcha so\'rov bilan TMDB noto\'g\'ri natija berishi mumkin', async () => {

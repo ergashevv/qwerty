@@ -1,5 +1,10 @@
 import { Context } from 'grammy';
-import { identifyFromText, getMovieDetails, imdbIdFromMovieUrl } from '../services/movieService';
+import {
+  identifyFromTextDetailed,
+  getMovieDetails,
+  imdbIdFromMovieUrl,
+  cacheEntryMatchesIdentified,
+} from '../services/movieService';
 import {
   getCached,
   setCache,
@@ -7,8 +12,10 @@ import {
   incrementUserRequests,
   getWindowRequestCount,
   recordUserActivityDay,
+  recordSearchRequest,
 } from '../db';
 import { insertPendingFeedback } from '../db/feedbackPending';
+import { buildBotReplyPreview } from '../utils/feedbackPreview';
 import { buildWatchKeyboard, sendMovieResult } from './photo';
 import { USER_REQUEST_LIMIT, isUnlimitedUser } from '../config/limits';
 import { extractInstagramReelUrl } from '../services/reelsUrl';
@@ -41,12 +48,27 @@ export async function handleText(ctx: Context): Promise<void> {
     await incrementUserRequests(userId);
   }
 
+  await recordSearchRequest(userId, 'text');
+
   const processing = await ctx.reply('🔍 Qidirilmoqda...');
 
   try {
-    const identified = await identifyFromText(text);
+    const idOutcome = await identifyFromTextDetailed(text);
 
-    if (!identified) {
+    if (idOutcome.outcome === 'unclear') {
+      await ctx.api.editMessageText(
+        ctx.chat!.id,
+        processing.message_id,
+        '❓ Aniq bitta filmni tanlab bo‘lmadi.\n\n' +
+          'Iltimos, qayta yozing — masalan:\n' +
+          '• taxminan qaysi yilda chiqqan\n' +
+          '• janr (drama, multfilm, ilmiy-fantastika…)\n' +
+          '• yoki aktyor / rejissor ismi'
+      );
+      return;
+    }
+
+    if (idOutcome.outcome !== 'found') {
       await ctx.api.editMessageText(
         ctx.chat!.id,
         processing.message_id,
@@ -55,12 +77,14 @@ export async function handleText(ctx: Context): Promise<void> {
       return;
     }
 
+    const identified = idOutcome.identified;
+
     await ctx.api.editMessageText(ctx.chat!.id, processing.message_id, `🎯 "${identified.title}" topildi! Yuklanmoqda...`);
 
     const cached = await getCached(identified.title);
     let details;
 
-    if (cached) {
+    if (cached && cacheEntryMatchesIdentified(identified, cached)) {
       details = {
         title: cached.title,
         uzTitle: cached.uz_title || cached.title,
@@ -105,6 +129,12 @@ export async function handleText(ctx: Context): Promise<void> {
       confidence: identified.confidence ?? null,
       photoFileId: null,
       keyboardKeepJson: JSON.stringify({ inline_keyboard: watchKb }),
+      userQueryText: text.slice(0, 4000),
+      botReplyPreview: buildBotReplyPreview({
+        uzTitle: details.uzTitle,
+        title: details.title,
+        plotUz: details.plotUz,
+      }),
     });
 
     await sendMovieResult(ctx, details, { pendingFeedbackToken: pendingToken });

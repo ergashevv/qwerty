@@ -120,12 +120,27 @@ export async function canUserSendPhoto(
   return { ok: true };
 }
 
+export type SearchRequestSource = 'text' | 'photo' | 'reels';
+
+/** Har bir qidiruv urinishi (matn / screenshot / reels) — dashboard statistikasi */
+export async function recordSearchRequest(telegramId: number, source: SearchRequestSource): Promise<void> {
+  const pool = getPostgresPool();
+  const now = Math.floor(Date.now() / 1000);
+  await pool.query(
+    `INSERT INTO search_requests (telegram_id, source, created_at) VALUES ($1, $2, $3)`,
+    [telegramId, source, now]
+  );
+  const old = now - 120 * 24 * 60 * 60;
+  await pool.query(`DELETE FROM search_requests WHERE created_at < $1`, [old]);
+}
+
 export async function recordPhotoRequest(telegramId: number): Promise<void> {
   const pool = getPostgresPool();
   const now = Math.floor(Date.now() / 1000);
   await pool.query(`INSERT INTO photo_requests (telegram_id, created_at) VALUES ($1, $2)`, [telegramId, now]);
   const old = now - 4 * 24 * 60 * 60;
   await pool.query(`DELETE FROM photo_requests WHERE created_at < $1`, [old]);
+  await recordSearchRequest(telegramId, 'photo');
 }
 
 export async function canUserReels(telegramId: number): Promise<boolean> {

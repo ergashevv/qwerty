@@ -42,6 +42,11 @@ export async function initPostgresSchema(): Promise<void> {
   await p.query(`
     CREATE INDEX IF NOT EXISTS idx_analytics_created ON analytics_events (created_at DESC)
   `);
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_analytics_identification_feedback
+    ON analytics_events (created_at DESC)
+    WHERE event_type = 'identification_feedback'
+  `);
 
   await p.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -97,6 +102,22 @@ export async function initPostgresSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_reels_user_time ON reels_requests (telegram_id, created_at)
   `);
 
+  /** Har bir matn / rasm / reels qidiruvi — statistika (feedbackdan mustaqil) */
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS search_requests (
+      id BIGSERIAL PRIMARY KEY,
+      telegram_id BIGINT NOT NULL,
+      source TEXT NOT NULL CHECK (source IN ('text','photo','reels')),
+      created_at BIGINT NOT NULL
+    )
+  `);
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_search_requests_time ON search_requests (created_at DESC)
+  `);
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_search_requests_src_time ON search_requests (source, created_at DESC)
+  `);
+
   await p.query(`
     CREATE TABLE IF NOT EXISTS pending_identification_feedback (
       id BIGSERIAL PRIMARY KEY,
@@ -125,6 +146,19 @@ export async function initPostgresSchema(): Promise<void> {
   `);
   await p.query(`
     CREATE INDEX IF NOT EXISTS idx_pending_fb_created ON pending_identification_feedback (created_at)
+  `);
+
+  await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE pending_identification_feedback ADD COLUMN user_query_text TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `);
+  await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE pending_identification_feedback ADD COLUMN bot_reply_preview TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
   `);
 
   await p.query(`
@@ -222,15 +256,55 @@ export async function insertAnalyticsEvent(
   }
 }
 
+/**
+ * Feedback: dashboard_thumb_b64 (base64) faqat so‘nggi N kunda saqlanadi — keyin metadata dan olib tashlanadi.
+ * To‘liq qator M kundan keyin o‘chiriladi (M >= N bo‘lishi kerak).
+ * Env: FEEDBACK_THUMB_RETENTION_DAYS (default 30), FEEDBACK_ANALYTICS_RETENTION_DAYS (default 90).
+ */
 export async function runAnalyticsRetention(): Promise<void> {
+  const pool = getPostgresPool();
+  const thumbDays = Math.min(365, Math.max(1, parseInt(process.env.FEEDBACK_THUMB_RETENTION_DAYS || '30', 10)));
+  let eventDays = Math.min(730, Math.max(1, parseInt(process.env.FEEDBACK_ANALYTICS_RETENTION_DAYS || '90', 10)));
+  if (eventDays < thumbDays) eventDays = thumbDays;
+
   try {
-    const r = await getPostgresPool().query(`
+    const strip = await pool.query(
+      `
+      UPDATE analytics_events
+      SET metadata = metadata - 'dashboard_thumb_b64' - 'user_query_text' - 'bot_reply_preview'
+      WHERE event_type = 'identification_feedback'
+        AND created_at < NOW() - ($1::integer * INTERVAL '1 day')
+        AND (
+          metadata ? 'dashboard_thumb_b64'
+          OR metadata ? 'user_query_text'
+          OR metadata ? 'bot_reply_preview'
+        )
+    `,
+      [thumbDays]
+    );
+    const ns = strip.rowCount ?? 0;
+    if (ns > 0) {
+      console.log(
+        `📉 Analytics: ${ns} ta feedbackdan rasm/matn qoldiqlari o‘chirildi (${thumbDays}+ kun)`
+      );
+    }
+  } catch (e) {
+    console.warn('analytics thumb retention:', (e as Error).message);
+  }
+
+  try {
+    const r = await pool.query(
+      `
       DELETE FROM analytics_events
       WHERE event_type = 'identification_feedback'
-        AND created_at < NOW() - INTERVAL '30 days'
-    `);
+        AND created_at < NOW() - ($1::integer * INTERVAL '1 day')
+    `,
+      [eventDays]
+    );
     const n = r.rowCount ?? 0;
-    if (n > 0) console.log(`📉 Analytics: ${n} ta eski feedback (30+ kun) o‘chirildi`);
+    if (n > 0) {
+      console.log(`📉 Analytics: ${n} ta eski feedback yozuvi o‘chirildi (${eventDays}+ kun)`);
+    }
   } catch (e) {
     console.warn('analytics retention:', (e as Error).message);
   }

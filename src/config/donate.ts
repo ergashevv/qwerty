@@ -16,7 +16,8 @@ function parsePositiveInt(raw: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
-const DEFAULT_FEEDBACK = [3, 10, 25];
+/** Feedback: birinchi ~3–4 ta «Ha»dan keyin; keyingi nuqtalar oraliqlari kengayadi (charchatmaydi). */
+const DEFAULT_FEEDBACK = [4, 12, 28, 60];
 const DEFAULT_SUCCESS = [20, 60, 150];
 
 export interface DonateConfig {

@@ -9,6 +9,18 @@ describe('donate milestones', () => {
     expect(nextMilestoneForTrack(25, [3, 10, 25], 10)).toBe(25);
     expect(nextMilestoneForTrack(9, [3, 10, 25], 3)).toBeNull();
   });
+
+  it('progressive default feedback milestones (4 → +8 → +16 → +32)', () => {
+    const m = [4, 12, 28, 60];
+    expect(nextMilestoneForTrack(3, m, 0)).toBeNull();
+    expect(nextMilestoneForTrack(4, m, 0)).toBe(4);
+    expect(nextMilestoneForTrack(11, m, 4)).toBeNull();
+    expect(nextMilestoneForTrack(12, m, 4)).toBe(12);
+    expect(nextMilestoneForTrack(27, m, 12)).toBeNull();
+    expect(nextMilestoneForTrack(28, m, 12)).toBe(28);
+    expect(nextMilestoneForTrack(59, m, 28)).toBeNull();
+    expect(nextMilestoneForTrack(60, m, 28)).toBe(60);
+  });
 });
 
 describe('donate cooldown', () => {

@@ -1,9 +1,15 @@
 import { Context } from 'grammy';
-import { getMovieDetails, MovieDetails, imdbIdFromMovieUrl } from '../services/movieService';
+import {
+  getMovieDetails,
+  MovieDetails,
+  imdbIdFromMovieUrl,
+  cacheEntryMatchesIdentified,
+} from '../services/movieService';
 import {
   getCached,
   setCache,
   tryReserveReelsSlot,
+  recordSearchRequest,
 } from '../db';
 import { insertPendingFeedback } from '../db/feedbackPending';
 import { buildWatchKeyboard, sendMovieResult } from './photo';
@@ -27,6 +33,8 @@ export async function handleInstagramReelUrl(ctx: Context, reelUrl: string): Pro
     );
     return;
   }
+
+  await recordSearchRequest(userId, 'reels');
 
   const processing = await ctx.reply('🔍 Reels tekshirilmoqda...');
   const chatId = ctx.chat!.id;
@@ -72,7 +80,7 @@ export async function handleInstagramReelUrl(ctx: Context, reelUrl: string): Pro
     const cached = await getCached(identified.title);
     let details: MovieDetails;
 
-    if (cached) {
+    if (cached && cacheEntryMatchesIdentified(fakeIdentified, cached)) {
       await ctx.api.editMessageText(
         chatId,
         msgId,

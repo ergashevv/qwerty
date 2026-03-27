@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI, DynamicRetrievalMode } from '@google/generative-ai';
 import axios from 'axios';
 import { withGemini } from './geminiClient';
 import sharpLib from 'sharp';
@@ -47,6 +47,8 @@ const SERPER_KEY = process.env.SERPER_API_KEY  || '';
 const VISION_KEY = process.env.VISION_API_KEY  || '';
 const IMGBB_KEY  = process.env.IMGBB_API_KEY   || '';
 const GEMINI_KEY = process.env.GEMINI_API_KEY  || '';
+/** Matnli syujet qidiruvida Google Search grounding (pulli; Serper snippetlari ixtiyoriy o‘chadi). */
+const GEMINI_GROUNDING_TEXT = process.env.GEMINI_GROUNDING_TEXT_SEARCH === 'true';
 /** Faqat Gemini (multimodal + matn + tarjima). */
 const GEMINI_MODEL = 'gemini-2.5-flash';
 const TIMEOUT    = 8000;
@@ -55,13 +57,32 @@ const TIMEOUT    = 8000;
 
 export function normalizeTitle(t: string): string {
   return t.toLowerCase()
+    .replace(/[ʻʼ'`‘·]/g, '\'') // Standartlashtirish
+    .replace(/[^a-z0-9\s']/g, ' ') // Har qanday boshqa belgilarni bo'shliq bilan almashtirish
     .replace(/\s*\(\d{4}.*?\)/g, '')
     .replace(/\s*[-–—|]\s*(wikipedia|imdb|rotten|letterboxd).*/i, '')
     .replace(/\s+/g, ' ').trim();
 }
 
+function slugifyForMatch(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[ʻʼ\u2018\u2019\u02BC\u02B9'`'·]/g, '')
+    .replace(/[^a-z0-9\u0400-\u04ff\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 // Stop-words that are too common to count as meaningful matches
-const STOP_WORDS = new Set(['the', 'a', 'an', 'of', 'in', 'on', 'at', 'to', 'and', 'or', 'is']);
+const STOP_WORDS = new Set([
+  'the', 'a', 'an', 'of', 'in', 'on', 'at', 'to', 'and', 'or', 'is',
+  // Uzbek stop-words
+  'kinosi', 'filmi', 'haqida', 'kino', 'korsatuv', 'serial', 'seriali',
+  'multfilm', 'multfilmi', 'uzbek', 'tilida', 'ozbek', 'o\'zbek', 'uzbekcha',
+  'kino', 'filmi', 'haqidagi', 'chiqqan', 'korgan', 'manosi', 'nomi'
+]);
 
 export function titlesMatch(a: string, b: string): boolean {
   const na = normalizeTitle(a), nb = normalizeTitle(b);
@@ -72,7 +93,8 @@ export function titlesMatch(a: string, b: string): boolean {
   // to avoid false positives from short common words like "iron", "man", "the"
   const shorter = na.length <= nb.length ? na : nb;
   const longer  = na.length <= nb.length ? nb : na;
-  if (shorter.length >= 6 && longer.includes(shorter)) return true;
+  // Exact substring match (only for long strings)
+  if (shorter.length >= 10 && longer.includes(shorter)) return true;
 
   // Jaccard similarity on meaningful tokens (strip stop-words)
   const tok = (s: string) => s
@@ -82,15 +104,31 @@ export function titlesMatch(a: string, b: string): boolean {
   const ta = tok(na), tb = tok(nb);
   if (!ta.length || !tb.length) return false;
 
-  // Single-word short queries must match exactly — Jaccard too lenient for them
-  // (e.g. "iron" should NOT fuzzy-match "Iron Man 3")
-  if (ta.length <= 1 && na.length < 6) return false;
-  if (tb.length <= 1 && nb.length < 6) return false;
+  // Single-word short queries must match exactly
+  if (ta.length <= 1 && tb.length <= 1) return na === nb;
+  if (ta.length <= 1 && na.length < 10) return false;
+  if (tb.length <= 1 && nb.length < 10) return false;
 
   const setB = new Set(tb);
   const inter = ta.filter(w => setB.has(w)).length;
   const union = new Set([...ta, ...tb]).size;
-  return inter >= 1 && (union > 0 ? inter / union : 0) >= 0.4;
+  const score = union > 0 ? inter / union : 0;
+
+  // Multi-word similarity threshold
+  return inter >= 1 && score >= 0.7;
+}
+
+/**
+ * movie_cache da eski xato yozuvlar bo‘lishi mumkin (bir xil kalit emas, lekin title noto‘g‘ri yozilgan yoki
+ * avvalgi bug bilan WALL-E o‘rniga boshqa film saqlangan). Identifikatsiya bilan mos kelmasa keshni rad etamiz.
+ */
+export function cacheEntryMatchesIdentified(
+  identified: MovieIdentified,
+  cached: { title: string; original_title?: string | null }
+): boolean {
+  if (titlesMatch(identified.title, cached.title)) return true;
+  if (cached.original_title && titlesMatch(identified.title, cached.original_title)) return true;
+  return false;
 }
 
 export function isNoisyTitle(title: string): boolean {
@@ -133,9 +171,13 @@ export async function tmdbSearch(query: string, type: MediaType | 'multi' = 'mul
       timeout: TIMEOUT,
     });
     const results: TmdbResult[] = r.data.results || [];
+    
+    // Exact match yoki yuqori mashhurlikka ega natijani qidirish (movie/tv da ham birinchi natija doim to‘g‘ri emas)
     const hit = type === 'multi'
-      ? results.find(x => x.media_type === 'movie' || x.media_type === 'tv')
-      : results[0];
+      ? (results.find(x => (x.media_type === 'movie' || x.media_type === 'tv') && titlesMatch(query, x.title || x.name || '')) || 
+         results.find(x => x.media_type === 'movie' || x.media_type === 'tv'))
+      : (results.find(x => titlesMatch(query, x.title || x.name || '')) || results[0]);
+
     if (!hit) return null;
     const mtype: MediaType = (hit.media_type === 'tv' || type === 'tv') ? 'tv' : 'movie';
     return { result: hit, type: mtype };
@@ -655,70 +697,234 @@ export async function identifyMovie(base64: string, mimeType: string): Promise<M
 
 // ─── MATN ORQALI FILM QIDIRISH ────────────────────────────────────────────────
 
-export async function identifyFromText(query: string): Promise<MovieIdentified | null> {
-  // OMDb — to'g'ridan qidirish (faqat so'rov nomi natija nomi bilan mos kelsa)
-  const omdb = await omdbSearch(query);
-  if (omdb) return { title: omdb.title, type: omdb.type };
+/**
+ * WALL-E ga xos syujet (o‘zbek/rus/lotin): kelajak, odamlar semirish, kursilarda passiv, bitta asosiy robot.
+ * LLM ba’zan faqat "robot + sevgi" ni Love, Death & Robots bilan adashtiradi — shu uchun deterministik yo‘l.
+ */
+function looksLikeWallEPlotDescription(q: string): boolean {
+  const n = q
+    .toLowerCase()
+    .normalize('NFKC')
+    .replace(/[\u2018\u2019\u02BC\u02B9]/g, "'");
+  const obesity = /(semir|semiz|semirish|tols|tolst|ожирел|полн)/i.test(n);
+  const chairs = /(kursi|kreslo|кресл|stul|кресел)/i.test(n);
+  const robot = /robot|робот/i.test(n);
+  return obesity && chairs && robot;
+}
 
-  // TMDb — natijani so'rov bilan solishtirib tekshirish
-  const tmdb = await tmdbSearch(query);
-  if (tmdb?.result) {
-    const tmdbTitle = tmdb.result.title || tmdb.result.name || '';
-    const voteCount = tmdb.result.vote_count ?? 0;
-    // Ikkita holda TMDB natijasiga ishonamiz:
-    // 1) Nom so'rov bilan mos kelsa (inglizcha)
-    // 2) Nom mos kelmasa ham, film juda mashhur bo'lsa (≥500 ovoz) —
-    //    bu boshqa tilda yozilgan so'rovlarda TMDB o'zi to'g'ri topishi mumkin
-    if (titlesMatch(query, tmdbTitle) || voteCount >= 500) {
-      return { title: tmdbTitle, type: tmdb.type };
-    }
-    // TMDb natijasi so'rov bilan mos kelmadi va mashxur emas — Gemini LLM
-  }
-
-  const llmPrompt = `Identify the EXACT movie or TV show from this query (may be in Uzbek, Russian, Turkish, or English title/description):
-"${query}"
-
-Rules:
-- If the query is a movie/show title in another language, return the original international title
-- If it's a description, identify the most likely match
-- Only respond if confidence is medium or high
-
-Respond ONLY with JSON:
-{"title": "Exact original title", "type": "movie" or "tv", "confidence": "high/medium/low"}`;
-
-  async function resolveLlmMovie(p: { title?: string; type?: string; confidence?: string }): Promise<MovieIdentified | null> {
-    if (!p.title || p.title.toLowerCase() === 'unknown' || p.confidence === 'low') return null;
-    const verified = await omdbSearch(p.title);
-    if (verified) return { title: verified.title, type: verified.type };
-    const tmdbVerified = await tmdbSearch(p.title);
-    if (tmdbVerified?.result) {
-      return {
-        title: tmdbVerified.result.title || tmdbVerified.result.name || p.title,
-        type: tmdbVerified.type,
-      };
-    }
-    if (p.confidence === 'high') {
-      return { title: p.title, type: p.type === 'tv' ? 'tv' : 'movie' };
-    }
-    return null;
-  }
-
-  if (!GEMINI_KEY) return null;
-
+/** Faqat so‘rov bilan sarlavha mos kelsa (uzun syujet matnida birinchi IMDb — doimiy xato, masalan Westler). */
+async function verifyPlotMatch(userQuery: string, movieTitle: string, tmdbOverview: string): Promise<boolean> {
+  if (!GEMINI_KEY || !tmdbOverview || tmdbOverview.length < 20) return true;
   try {
     const genAI = new GoogleGenerativeAI(GEMINI_KEY);
     const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+    const result = await withGemini(() =>
+      model.generateContent(
+        `User described a movie/show like this (may be in Uzbek, Russian, or another language):
+"${userQuery.slice(0, 500)}"
+
+The system identified it as: "${movieTitle}"
+Official plot: "${tmdbOverview}"
+
+Does the user's description plausibly match this movie's plot? The user may describe only one scene, character, or aspect — not the full plot.
+Answer ONLY "yes" or "no".`
+      )
+    );
+    const text = result.response.text()?.trim().toLowerCase();
+    if (text?.startsWith('no')) {
+      console.log(`⚠️ Plot verification failed: user query vs "${movieTitle}"`);
+      return false;
+    }
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+async function identifyBySerper(query: string): Promise<MovieIdentified | null> {
+  const searchResults = await serperSearch(`${query} movie imdb`);
+  for (const res of searchResults) {
+    const m = res.link.match(/imdb\.com\/title\/(tt\d+)/);
+    if (!m) continue;
+    const found = await omdbById(m[1]);
+    if (!found) continue;
+    if (titlesMatch(query, found.title)) {
+      return { title: found.title, type: found.type };
+    }
+  }
+  return null;
+}
+
+export type IdentifyFromTextResult =
+  | { outcome: 'found'; identified: MovieIdentified }
+  | { outcome: 'unclear' }
+  | { outcome: 'not_found' };
+
+/** Matnli qidiruv: topildi / noaniq (yil-janr so‘rang) / topilmadi */
+export async function identifyFromTextDetailed(query: string): Promise<IdentifyFromTextResult> {
+  const notFound = (): IdentifyFromTextResult => ({ outcome: 'not_found' });
+  const found = (identified: MovieIdentified): IdentifyFromTextResult => ({ outcome: 'found', identified });
+  const unclear = (): IdentifyFromTextResult => ({ outcome: 'unclear' });
+
+  if (!query || query.trim().length < 2) return notFound();
+  const normalizedQuery = query.trim().toLowerCase();
+  const words = normalizedQuery.split(/\s+/).filter(w => w.length > 2);
+
+  // 1. Literal OMDB/TMDB check — faqat QISQA so'rovlar (nomlar) uchun
+  if (words.length <= 4) {
+    const omdb = await omdbSearch(query);
+    if (omdb) return found({ title: omdb.title, type: omdb.type });
+
+    const tmdb = await tmdbSearch(query);
+    if (tmdb?.result) {
+      const tmdbTitle = tmdb.result.title || tmdb.result.name || '';
+      const voteCount = tmdb.result.vote_count ?? 0;
+      if (titlesMatch(query, tmdbTitle) || voteCount >= 500) {
+        return found({ title: tmdbTitle, type: tmdb.type });
+      }
+    }
+  }
+
+  // 2a. WALL-E syujeti — API xatosiz to‘g‘ridan-to‘g‘ri (OMDB ba’zan boshqa filmga ulab yuboradi)
+  if (looksLikeWallEPlotDescription(query)) {
+    console.log(`🎯 Plot heuristic → WALL-E (semirgan + kursi + robot)`);
+    return found({ title: 'WALL-E', type: 'movie' });
+  }
+
+  // 2b. Serper — faqat so‘rov film sarlavhasiga o‘xshaganda (matn bilan titlesMatch)
+  const serper = await identifyBySerper(query);
+  if (serper) {
+    console.log(`🔍 Text identification (Serper): "${query}" -> Found "${serper.title}"`);
+    return found(serper);
+  }
+
+  // 3. Serper konteksti + LLM — uzun tavsiflar
+  if (!GEMINI_KEY) return notFound();
+
+  const contextResults = GEMINI_GROUNDING_TEXT
+    ? []
+    : await serperSearch(`${query} qaysi film kino`, 'uz', 'uz');
+  const snippets = GEMINI_GROUNDING_TEXT
+    ? '(Google Search grounding yoqilgan — qidiruv model ichida)'
+    : contextResults.slice(0, 3).map(r => `${r.title}: ${r.snippet}`).join('\n\n');
+
+  const llmPrompt = `You are a professional movie expert. Identify the exact movie/TV show from this USER query.
+The user might be describing a specific scene, plot, or character they remember.
+
+USER QUERY: "${query}"
+GOOGLE SEARCH CONTEXT (clues):
+${snippets}
+
+Rules:
+1. Match the USER'S FULL PLOT, not only loose keywords. Example: "robot" + "love" appears in many works — pick the one whose ENTIRE scenario fits (setting, premise, ending).
+2. Prefer a single famous FEATURE FILM over an anthology TV series when the description is one continuous story (e.g. obese passive humans floating in chairs + one main small robot + Earth/space ship setting → the Pixar film "WALL-E", NOT "Love, Death & Robots" unless they clearly describe that anthology's format).
+3. Provide the exact ORIGINAL English title (e.g. "WALL-E", not a translated title).
+4. DO NOT translate the movie title literally into Uzbek.
+5. If two titles share words but only one matches the plot details, choose that one. If still ambiguous, use confidence "medium" or "low".
+
+Respond ONLY with this JSON structure:
+{"title": "Original English Title", "type": "movie" or "tv", "confidence": "high/medium/low"}`;
+
+  try {
+    const genAI = new GoogleGenerativeAI(GEMINI_KEY);
+    const model = GEMINI_GROUNDING_TEXT
+      ? genAI.getGenerativeModel({
+          model: GEMINI_MODEL,
+          tools: [
+            {
+              googleSearchRetrieval: {
+                dynamicRetrievalConfig: {
+                  mode: DynamicRetrievalMode.MODE_DYNAMIC,
+                  dynamicThreshold: 0.3,
+                },
+              },
+            },
+          ],
+        })
+      : genAI.getGenerativeModel({ model: GEMINI_MODEL });
     const result = await withGemini(() => model.generateContent(llmPrompt));
-    const text = result.response.text();
-    const m = text.match(/\{[\s\S]*?\}/);
+    const textResponse = result.response.text();
+    console.log(`🤖 Text identification (LLM): "${query}" -> Response:`, textResponse);
+
+    const m = textResponse.match(/\{[\s\S]*?\}/);
     if (m) {
       const p = JSON.parse(m[0]) as { title?: string; type?: string; confidence?: string };
-      const resolved = await resolveLlmMovie(p);
-      if (resolved) return resolved;
-    }
-  } catch { /* ignore */ }
+      const conf = (p.confidence || '').toLowerCase();
+      if (!p.title || p.title.toLowerCase() === 'unknown') return notFound();
+      if (conf === 'low') return unclear();
 
-  return null;
+      let verifiedTitle: string | null = null;
+      let verifiedType: MediaType = p.type === 'tv' ? 'tv' : 'movie';
+      let tmdbOverview: string | null = null;
+
+      const omdbResult = await omdbSearch(p.title);
+      if (omdbResult) {
+        verifiedTitle = omdbResult.title;
+        verifiedType = omdbResult.type;
+      }
+
+      const tmdbVerified = !verifiedTitle ? await tmdbSearch(p.title) : null;
+      if (tmdbVerified?.result) {
+        const tmdbTitle = tmdbVerified.result.title || tmdbVerified.result.name || '';
+        tmdbOverview = tmdbVerified.result.overview || null;
+        if (titlesMatch(p.title, tmdbTitle) || (tmdbVerified.result.vote_count ?? 0) >= 1000) {
+          verifiedTitle = tmdbTitle;
+          verifiedType = tmdbVerified.type;
+        }
+      }
+
+      if (!verifiedTitle) {
+        console.log(`🔍 LLM title verification (Serper): "${p.title}"`);
+        const serperVerify = await identifyBySerper(p.title);
+        if (serperVerify) {
+          verifiedTitle = serperVerify.title;
+          verifiedType = serperVerify.type;
+        }
+      }
+
+      const isPlotQuery = words.length > 6;
+
+      if (verifiedTitle && isPlotQuery) {
+        if (!tmdbOverview) {
+          const tmdbForPlot = await tmdbSearch(verifiedTitle);
+          tmdbOverview = tmdbForPlot?.result?.overview || null;
+        }
+        if (tmdbOverview) {
+          const plotOk = await verifyPlotMatch(query, verifiedTitle, tmdbOverview);
+          if (!plotOk) return unclear();
+        }
+      }
+
+      if (verifiedTitle) {
+        return found({ title: verifiedTitle, type: verifiedType });
+      }
+
+      if (conf === 'high') {
+        if (isPlotQuery) {
+          if (!tmdbOverview) {
+            const tmdbForPlot = await tmdbSearch(p.title);
+            tmdbOverview = tmdbForPlot?.result?.overview || null;
+          }
+          if (tmdbOverview) {
+            const plotOk = await verifyPlotMatch(query, p.title, tmdbOverview);
+            if (!plotOk) return unclear();
+          }
+        }
+        return found({ title: p.title, type: verifiedType });
+      }
+      return unclear();
+    }
+  } catch (err) {
+    console.error(`❌ Text identification (LLM) error:`, (err as Error).message);
+    return notFound();
+  }
+
+  return notFound();
+}
+
+export async function identifyFromText(query: string): Promise<MovieIdentified | null> {
+  const r = await identifyFromTextDetailed(query);
+  return r.outcome === 'found' ? r.identified : null;
 }
 
 // ─── FILM MA'LUMOTLARI VA WATCH LINKS ────────────────────────────────────────
@@ -738,19 +944,41 @@ async function translateToUzbek(text: string): Promise<string> {
   } catch { return text; }
 }
 
-async function translateTitle(englishTitle: string): Promise<string> {
-  if (!GEMINI_KEY) return englishTitle;
+async function translateTitle(
+  displayTitle: string,
+  originalTitle: string,
+  year: string,
+  mediaType: MediaType,
+): Promise<string> {
+  if (!GEMINI_KEY) return displayTitle;
+  const kind = mediaType === 'tv' ? 'TV show' : 'movie';
+  const orig = (originalTitle || '').trim();
+  const disp = (displayTitle || '').trim();
+  const y = (year || '').trim();
   try {
     const genAI = new GoogleGenerativeAI(GEMINI_KEY);
     const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
     const r = await withGemini(() =>
       model.generateContent(
-        `Translate ONLY the movie/TV show title "${englishTitle}" to Uzbek (official localization used in Uzbek dubbing). If no official Uzbek title exists, transliterate or keep original. Output ONLY the title, nothing else.`
+        `You are naming this ${kind} for Uzbek-speaking viewers (dubs, streaming, cinema).
+
+TMDB English/international title: "${disp}"
+Original title (may differ from English for foreign films): "${orig || disp}"
+Release year: ${y || 'unknown'}
+
+Rules — CRITICAL:
+1. Do NOT produce a literal word-for-word translation of the English (or original) title. Uzbek releases often use a completely different market title (short phrase, different wording, or kept English).
+2. Output the title that is actually used on Uzbek posters, TV, or sites like uzmovi / kinoxit when you know it. If several names exist, pick the most common search term users type.
+3. If there is no well-known Uzbek market title, output the English title "${disp}" unchanged (Latin script), not a guessed translation.
+4. Output ONLY the Uzbek market title or English title — one line, no quotes, no explanation.`
       )
     );
-    const result = r.response.text()?.trim() || englishTitle;
-    return result.toLowerCase() === englishTitle.toLowerCase() ? englishTitle : result;
-  } catch { return englishTitle; }
+    const result = r.response.text()?.trim().replace(/^["']|["']$/g, '') || displayTitle;
+    const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+    return norm(result) === norm(disp) ? disp : result;
+  } catch {
+    return displayTitle;
+  }
 }
 
 const ALLOWED_HOSTS = [
@@ -780,59 +1008,183 @@ function isAllowedWatchUrl(url: string, title?: string): boolean {
   } catch { return false; }
 }
 
-async function findWatchLinks(title: string, originalTitle: string, year: string): Promise<WatchLink[]> {
-  const base = originalTitle || title;
-  const q1 = `${base} ${year} o'zbek tilida tomosha ko'rish`.trim();
-  const q2 = `${base} o'zbek tilida`.trim();
-  const q3 = `${base} смотреть онлайн`;
+/**
+ * Tomosha havolalari qidiruvi: saytlar odatda inglizcha (yoki TMDB original_title) nom bilan.
+ * O‘zbekcha tarjima nomi (masalan "Yettinchi farzand") bilan qidiruv bo‘sh chiqishi mumkin.
+ */
+function isLinkRelevantToMovie(
+  result: SerperResult,
+  allTitles: string[],
+  year: string,
+): boolean {
+  let urlPath = '';
+  try {
+    urlPath = decodeURIComponent(new URL(result.link).pathname).replace(/[-_./]/g, ' ');
+  } catch {
+    urlPath = result.link;
+  }
 
-  const [r1, r2, r3] = await Promise.allSettled([
-    serperSearch(q1, 'uz', 'uz'),
-    serperSearch(q2, 'uz', 'uz'),
-    serperSearch(q3, 'ru', 'ru'),
+  const haystack = [
+    slugifyForMatch(result.title || ''),
+    slugifyForMatch(result.snippet || ''),
+    slugifyForMatch(urlPath),
+  ].join(' ');
+  const haystackWords = haystack.split(/\s+/).filter(w => w.length >= 3);
+
+  for (const rawTitle of allTitles) {
+    if (!rawTitle || rawTitle.trim().length < 2) continue;
+    const titleSlug = slugifyForMatch(rawTitle);
+    if (titleSlug.length < 2) continue;
+
+    if (haystack.includes(titleSlug)) return true;
+
+    const words = titleSlug.split(/\s+/).filter(w => w.length >= 3);
+    if (words.length === 0) continue;
+
+    const matchCount = words.filter(w =>
+      haystack.includes(w) ||
+      (w.length >= 4 && haystackWords.some(hw => hw.startsWith(w.slice(0, 4)) || w.startsWith(hw.slice(0, 4))))
+    ).length;
+
+    const threshold = words.length <= 2 ? words.length : Math.ceil(words.length * 0.5);
+    if (matchCount >= threshold) return true;
+  }
+
+  if (year && year.length === 4 && haystack.includes(year)) {
+    for (const rawTitle of allTitles) {
+      const words = slugifyForMatch(rawTitle).split(/\s+/).filter(w => w.length >= 4);
+      for (const w of words) {
+        if (haystack.includes(w)) return true;
+        if (haystackWords.some(hw => hw.startsWith(w.slice(0, 4)) || w.startsWith(hw.slice(0, 4)))) return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+async function findWatchLinks(
+  englishDisplayTitle: string,
+  originalTitle: string,
+  year: string,
+  uzTitle?: string,
+): Promise<WatchLink[]> {
+  const a = (originalTitle || '').trim();
+  const b = (englishDisplayTitle || '').trim();
+  const uz = (uzTitle || '').trim();
+  const allTitles = [...new Set([a, b, uz].filter(x => x.length > 0))];
+
+  const searchTitles = [...new Set([a, b].filter((x) => x.length > 0))];
+  const primary = searchTitles[0] || b;
+
+  const qUz1 = `${primary} ${year} o'zbek tilida`.trim();
+  const qUz2 = `${primary} o'zbek tilida`.trim();
+  const qUz3 = `${primary} uzbek tilida`.trim();
+  const qRu = `${primary} смотреть онлайн`;
+
+  const extraTitle = searchTitles.length > 1 && searchTitles[1] !== primary ? searchTitles[1] : null;
+  const qUzAlt = extraTitle ? `${extraTitle} o'zbek tilida`.trim() : null;
+
+  const needUzTitleSearch = uz && uz.toLowerCase() !== primary.toLowerCase()
+    && (!extraTitle || uz.toLowerCase() !== extraTitle.toLowerCase());
+  const qUzT1 = needUzTitleSearch ? `${uz} o'zbek tilida` : null;
+  const qUzT2 = needUzTitleSearch ? `${uz} ${year} o'zbek tilida` : null;
+
+  const settle = (r: PromiseSettledResult<SerperResult[]>) =>
+    r.status === 'fulfilled' ? r.value : [];
+
+  const [resUz1, resUz2, resUz3, resRu, resUzAlt, resUzT1, resUzT2] = await Promise.allSettled([
+    serperSearch(qUz1, 'uz', 'uz'),
+    serperSearch(qUz2, 'uz', 'uz'),
+    serperSearch(qUz3, 'uz', 'uz'),
+    serperSearch(qRu, 'ru', 'ru'),
+    qUzAlt ? serperSearch(qUzAlt, 'uz', 'uz') : Promise.resolve([] as SerperResult[]),
+    qUzT1 ? serperSearch(qUzT1, 'uz', 'uz') : Promise.resolve([] as SerperResult[]),
+    qUzT2 ? serperSearch(qUzT2, 'uz', 'uz') : Promise.resolve([] as SerperResult[]),
   ]);
 
-  const all = [
-    ...(r1.status === 'fulfilled' ? r1.value : []),
-    ...(r2.status === 'fulfilled' ? r2.value : []),
-    ...(r3.status === 'fulfilled' ? r3.value : []),
+  const uzResults = [
+    ...settle(resUzT1), ...settle(resUzT2),
+    ...settle(resUz1), ...settle(resUz2), ...settle(resUz3),
+    ...settle(resUzAlt),
   ];
+  const ruResults = settle(resRu);
 
   const seen = new Set<string>();
-  const links: WatchLink[] = [];
+  const finalLinks: WatchLink[] = [];
 
-  for (const item of all) {
+  for (const item of uzResults) {
     if (!isAllowedWatchUrl(item.link, item.title)) continue;
     const host = canonHost(item.link);
     if (seen.has(host)) continue;
+    if (!isLinkRelevantToMovie(item, allTitles, year)) {
+      console.log(`🔗 Skipped (uz): ${host} — "${item.title?.slice(0, 60)}"`);
+      continue;
+    }
     seen.add(host);
-    links.push({ title: item.title, link: item.link, source: host });
-    if (links.length >= 4) break;
+    finalLinks.push({ title: item.title, link: item.link, source: host });
+    if (finalLinks.length >= 3) break;
   }
 
-  return links;
+  const ruCountLimit = finalLinks.length === 0 ? 3 : 2;
+  let ruAdded = 0;
+  for (const item of ruResults) {
+    if (!isAllowedWatchUrl(item.link, item.title)) continue;
+    const host = canonHost(item.link);
+    if (seen.has(host)) continue;
+    if (!isLinkRelevantToMovie(item, allTitles, year)) {
+      console.log(`🔗 Skipped (ru): ${host} — "${item.title?.slice(0, 60)}"`);
+      continue;
+    }
+    seen.add(host);
+    const ruTitle = item.title.length > 50 ? host : item.title;
+    finalLinks.push({ title: ruTitle, link: item.link, source: `${host} (RU)` });
+    ruAdded++;
+    if (ruAdded >= ruCountLimit || finalLinks.length >= 5) break;
+  }
+
+  if (finalLinks.length < 4) {
+    for (const item of uzResults) {
+      if (finalLinks.length >= 5) break;
+      const host = canonHost(item.link);
+      if (seen.has(host)) continue;
+      if (!isAllowedWatchUrl(item.link, item.title)) continue;
+      if (!isLinkRelevantToMovie(item, allTitles, year)) continue;
+      seen.add(host);
+      finalLinks.push({ title: item.title, link: item.link, source: host });
+    }
+  }
+
+  return finalLinks.slice(0, 5);
 }
 
 export async function getMovieDetails(identified: MovieIdentified): Promise<MovieDetails> {
   const { title, type } = identified;
 
-  // OMDb dan IMDb ID
+  // OMDb dan IMDb ID — birinchi mos keluvchi ba’zan boshqa film bo‘lishi mumkin; TMDB bilan tekshiramiz
   let imdbId: string | null = null;
   const omdb = await omdbSearch(title, type === 'tv' ? 'series' : 'movie');
   if (omdb) imdbId = omdb.imdbId;
 
-  // TMDb detallar
   let tmdbResult: TmdbResult | null = null;
   if (imdbId) {
     const found = await tmdbByImdbId(imdbId);
-    if (found) tmdbResult = found.result;
+    if (found) {
+      const rt = found.result.title || found.result.name || '';
+      const ro = found.result.original_title || found.result.original_name || '';
+      if (titlesMatch(title, rt) || titlesMatch(title, ro)) {
+        tmdbResult = found.result;
+      } else {
+        imdbId = null;
+      }
+    }
   }
   if (!tmdbResult) {
     const found = await tmdbSearch(title, type);
     if (found) tmdbResult = found.result;
   }
 
-  // TMDb dan to'liq detallar
+  // TMDb dan to'liq detallar (imdb_id shu yerda keladi)
   if (tmdbResult?.id) {
     try {
       const r = await axios.get(`https://api.themoviedb.org/3/${type}/${tmdbResult.id}`, {
@@ -842,6 +1194,10 @@ export async function getMovieDetails(identified: MovieIdentified): Promise<Movi
       tmdbResult = { ...tmdbResult, ...r.data };
     } catch { /* ignore */ }
   }
+  if (tmdbResult && !imdbId) {
+    const ext = (tmdbResult as { imdb_id?: string }).imdb_id;
+    if (ext && /^tt\d+$/i.test(String(ext))) imdbId = String(ext);
+  }
 
   const displayTitle = (type === 'tv' ? tmdbResult?.name : tmdbResult?.title) || title;
   const originalTitle = (type === 'tv' ? tmdbResult?.original_name : tmdbResult?.original_title) || title;
@@ -849,12 +1205,11 @@ export async function getMovieDetails(identified: MovieIdentified): Promise<Movi
   const rating = tmdbResult?.vote_average ? tmdbResult.vote_average.toFixed(1) : 'N/A';
   const posterUrl = tmdbResult?.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbResult.poster_path}` : null;
 
-  // Plot va title tarjimasi parallel
   const englishPlot = tmdbResult?.overview || '';
-  const [uzTitle, plotUz, watchLinks] = await Promise.all([
-    translateTitle(displayTitle),
+  const uzTitle = await translateTitle(displayTitle, originalTitle, year, type);
+  const [plotUz, watchLinks] = await Promise.all([
     englishPlot ? translateToUzbek(englishPlot) : Promise.resolve('Tavsif mavjud emas'),
-    findWatchLinks(displayTitle, originalTitle, year),
+    findWatchLinks(displayTitle, originalTitle, year, uzTitle),
   ]);
 
   return {
