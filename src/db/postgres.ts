@@ -117,6 +117,12 @@ export async function initPostgresSchema(): Promise<void> {
   await p.query(`
     CREATE INDEX IF NOT EXISTS idx_search_requests_src_time ON search_requests (source, created_at DESC)
   `);
+  await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE search_requests ADD COLUMN query_text TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `);
 
   await p.query(`
     CREATE TABLE IF NOT EXISTS pending_identification_feedback (

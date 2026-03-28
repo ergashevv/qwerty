@@ -64,6 +64,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
   await recordPhotoRequest(userId);
 
   const processing = await ctx.reply('🔍 Qidirilmoqda...');
+  void ctx.api.sendChatAction(ctx.chat!.id, 'typing');
 
   try {
     // Telegram dan eng katta o'lchamdagi rasmni olish

@@ -31,19 +31,27 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
     return;
   }
 
-  const row = await consumePendingFeedback(keyPart, uid);
+  /**
+   * Telegram callback ~10s ichida answerCallbackQuery talab qiladi.
+   * DB sekin bo‘lsa — "query is too old", foydalanuvchi hech narsa ko‘rmaydi.
+   * Avvalo callback ni yopamiz (matnsiz — ikkinchi bosishda noto‘g‘ri "Rahmat" chiqmasin).
+   */
+  await ctx.answerCallbackQuery();
+
+  let row;
+  try {
+    row = await consumePendingFeedback(keyPart, uid);
+  } catch (e) {
+    console.error('consumePendingFeedback:', (e as Error).message);
+    return;
+  }
+
   if (!row) {
-    /** Ikkinchi bosish, eski xabar yoki boshqa user — ogohlantirishsiz */
-    await ctx.answerCallbackQuery({ text: 'Qabul qilingan' });
+    /** Ikkinchi bosish / boshqa user / eski tugma */
     return;
   }
 
   const correct = vote === 'y';
-
-  await ctx.answerCallbackQuery({
-    text: correct ? 'Rahmat! ❤️' : 'Rahmat, yaxshilaymiz 🙏',
-    show_alert: false,
-  });
 
   /** Fikr tugmalarini olib tashlash; tomosha havolalari qoladi */
   const keep = row.keyboard_keep_json;

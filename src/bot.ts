@@ -141,6 +141,13 @@ async function bootstrap(): Promise<void> {
     } else {
       console.error("Noma'lum xato:", err.error);
     }
+    /** Callback allaqachon yopilmagan bo‘lsa yoki "query is too old" — qo‘shimcha xabar spam qilmaymiz */
+    const g = err.error instanceof GrammyError ? err.error.description : '';
+    if (g.includes('query is too old') || g.includes('query ID is invalid')) return;
+    if (ctx.callbackQuery) return;
+    if (ctx.message) {
+      void ctx.reply('⚠️ Vaqtincha xatolik. Birozdan keyin qayta urinib ko‘ring.').catch(() => {});
+    }
   });
 
   console.log('🤖 Kinova Bot ishga tushmoqda...');

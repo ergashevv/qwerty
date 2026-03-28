@@ -21,6 +21,7 @@ import { buildWatchKeyboard, sendMovieResult } from './photo';
 import { USER_REQUEST_LIMIT, isUnlimitedUser } from '../config/limits';
 import { extractInstagramReelUrl } from '../services/reelsUrl';
 import { handleInstagramReelUrl } from './reels';
+import { STATUS_DETAILS_LINES, withRotatingStatus } from './rotatingStatus';
 
 export async function handleText(ctx: Context): Promise<void> {
   const text = ctx.message?.text?.trim();
@@ -49,12 +50,19 @@ export async function handleText(ctx: Context): Promise<void> {
     await incrementUserRequests(userId);
   }
 
-  await recordSearchRequest(userId, 'text');
+  await recordSearchRequest(userId, 'text', { queryText: text });
 
   const processing = await ctx.reply('🔍 Qidirilmoqda...');
+  void ctx.api.sendChatAction(ctx.chat!.id, 'typing');
 
   try {
-    const idOutcome = await identifyFromTextDetailed(text);
+    const idOutcome = await withRotatingStatus(
+      ctx,
+      ctx.chat!.id,
+      processing.message_id,
+      ['·'],
+      () => identifyFromTextDetailed(text)
+    );
 
     if (idOutcome.outcome === 'unclear') {
       await ctx.api.editMessageText(
@@ -101,7 +109,16 @@ export async function handleText(ctx: Context): Promise<void> {
         mediaType: identified.type,
       };
     } else {
-      details = await getMovieDetails(identified);
+      const detailLines = STATUS_DETAILS_LINES(identified.title);
+      await ctx.api.editMessageText(ctx.chat!.id, processing.message_id, detailLines[0]);
+      details = await withRotatingStatus(
+        ctx,
+        ctx.chat!.id,
+        processing.message_id,
+        detailLines,
+        () => getMovieDetails(identified),
+        { intervalMs: 2800 }
+      );
       await setCache(identified.title, {
         title: details.title,
         uz_title: details.uzTitle,

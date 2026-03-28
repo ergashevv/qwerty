@@ -40,6 +40,7 @@ export async function handleInstagramReelUrl(ctx: Context, reelUrl: string): Pro
   const processing = await ctx.reply('🔍 Reels tekshirilmoqda...');
   const chatId = ctx.chat!.id;
   const msgId = processing.message_id;
+  void ctx.api.sendChatAction(chatId, 'typing');
 
   try {
     await ctx.api.editMessageText(

@@ -22,6 +22,16 @@ export const STATUS_DETAILS_LINES = (filmTitle: string) => [
  * Uzoq async vazifa davomida xabarni muntazam yangilaydi.
  * Birinchi qatorni chaqiriuvchi oldindan `editMessageText` bilan qo‘yishi kerak (yoki shu yerda birinchi qatorni berish).
  */
+/** Telegram "typing..." indikatori ~5s dan keyin o‘chadi — uzoq vazifada qayta-yuborish */
+function startTypingHeartbeat(ctx: Context, chatId: number): () => void {
+  const fire = (): void => {
+    void ctx.api.sendChatAction(chatId, 'typing').catch(() => {});
+  };
+  fire();
+  const id = setInterval(fire, 4500);
+  return () => clearInterval(id);
+}
+
 export async function withRotatingStatus<T>(
   ctx: Context,
   chatId: number,
@@ -31,8 +41,13 @@ export async function withRotatingStatus<T>(
   options?: { intervalMs?: number }
 ): Promise<T> {
   const intervalMs = options?.intervalMs ?? 3200;
+  const stopTyping = startTypingHeartbeat(ctx, chatId);
   if (lines.length <= 1) {
-    return task();
+    try {
+      return await task();
+    } finally {
+      stopTyping();
+    }
   }
 
   let idx = 0;
@@ -46,5 +61,6 @@ export async function withRotatingStatus<T>(
     return await task();
   } finally {
     clearInterval(timer);
+    stopTyping();
   }
 }

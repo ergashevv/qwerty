@@ -120,8 +120,8 @@ export async function handleDonateCallback(ctx: Context): Promise<void> {
   }
 
   if (data === 'donate:dismiss') {
-    await setDonateOptOut(uid);
     await ctx.answerCallbackQuery({ text: 'Yaxshi, boshqa ko‘rsatmaymiz 🙏' });
+    await setDonateOptOut(uid);
     try {
       await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
     } catch {

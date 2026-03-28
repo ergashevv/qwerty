@@ -123,12 +123,20 @@ export async function canUserSendPhoto(
 export type SearchRequestSource = 'text' | 'photo' | 'reels';
 
 /** Har bir qidiruv urinishi (matn / screenshot / reels) — dashboard statistikasi */
-export async function recordSearchRequest(telegramId: number, source: SearchRequestSource): Promise<void> {
+export async function recordSearchRequest(
+  telegramId: number,
+  source: SearchRequestSource,
+  opts?: { queryText?: string }
+): Promise<void> {
   const pool = getPostgresPool();
   const now = Math.floor(Date.now() / 1000);
+  const q =
+    source === 'text' && opts?.queryText
+      ? opts.queryText.trim().slice(0, 500)
+      : null;
   await pool.query(
-    `INSERT INTO search_requests (telegram_id, source, created_at) VALUES ($1, $2, $3)`,
-    [telegramId, source, now]
+    `INSERT INTO search_requests (telegram_id, source, created_at, query_text) VALUES ($1, $2, $3, $4)`,
+    [telegramId, source, now, q]
   );
   const old = now - 120 * 24 * 60 * 60;
   await pool.query(`DELETE FROM search_requests WHERE created_at < $1`, [old]);

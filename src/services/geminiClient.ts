@@ -4,9 +4,10 @@
  * Tier ~1000 RPM bo'lsa ham, foydalanuvchiga tartib — oldindan cheklash.
  */
 
-const MAX_CONCURRENT = Math.max(1, parseInt(process.env.GEMINI_MAX_CONCURRENT || '8', 10));
+/** Default 10 — navbat qisqaroq; 429 ko‘p bo‘lsa GEMINI_MAX_CONCURRENT kamaytiring yoki API tier oshiring */
+const MAX_CONCURRENT = Math.max(1, parseInt(process.env.GEMINI_MAX_CONCURRENT || '10', 10));
 /** Ketma-ket chaqiruvlar orasidagi minimal pause (ms) — burstni yumshatadi */
-const MIN_GAP_MS = Math.max(0, parseInt(process.env.GEMINI_MIN_GAP_MS || '70', 10));
+const MIN_GAP_MS = Math.max(0, parseInt(process.env.GEMINI_MIN_GAP_MS || '55', 10));
 const MAX_RETRIES = Math.max(0, parseInt(process.env.GEMINI_MAX_RETRIES || '4', 10));
 
 let active = 0;
