@@ -230,6 +230,13 @@ export async function initPostgresSchema(): Promise<void> {
     EXCEPTION WHEN duplicate_column THEN NULL;
     END $$
   `);
+
+  await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE users ADD COLUMN blocked_at TIMESTAMPTZ NULL;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `);
 }
 
 export async function withPgClient<T>(fn: (c: PoolClient) => Promise<T>): Promise<T | null> {

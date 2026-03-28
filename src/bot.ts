@@ -11,7 +11,7 @@ import {
   recordUserActivityDay,
   upsertUser,
 } from './db';
-import { initPostgresSchema, pingPostgres, runAnalyticsRetention } from './db/postgres';
+import { getPostgresPool, initPostgresSchema, pingPostgres, runAnalyticsRetention } from './db/postgres';
 import { handleIdentificationFeedback } from './handlers/feedback';
 import { handleDonateCallback } from './handlers/donatePrompt';
 
@@ -23,7 +23,7 @@ if (!_botToken) {
 const botToken: string = _botToken;
 
 if (!process.env.DATABASE_URL?.trim()) {
-  console.error('❌ DATABASE_URL majburiy — barcha ma’lumotlar Postgres (Neon) da.');
+  console.error("❌ DATABASE_URL majburiy — barcha ma'lumotlar Postgres (Neon) da.");
   process.exit(1);
 }
 
@@ -104,23 +104,45 @@ async function bootstrap(): Promise<void> {
       const aud = await getAudienceStats();
       const fb = await getIdentificationFeedbackStats();
       const fbTotal = fb.yes + fb.no;
+      const blockedRes = await getPostgresPool().query(
+        `SELECT COUNT(*) AS cnt FROM users WHERE blocked_at IS NOT NULL`
+      );
+      const blockedCount = Number(blockedRes.rows[0]?.cnt ?? 0);
 
       await ctx.reply(
         `📊 <b>Statistika</b>\n\n` +
           `<b>Foydalanuvchilar</b>\n` +
-          `👥 Jami akkauntlar: ${aud.totalUsers}\n\n` +
+          `👥 Jami akkauntlar: ${aud.totalUsers}\n` +
+          `🚫 Bot bloklagan: ${blockedCount}\n\n` +
           `<b>Faollik (UTC)</b>\n` +
           `Bugun: ${aud.dau}\n` +
           `Joriy hafta: ${aud.wau}\n` +
           `Joriy oy: ${aud.mau}\n\n` +
           `<b>Result</b>\n` +
-          `✅ To‘g‘ri topildi (Ha): ${fb.yes}\n` +
-          `❌ Boshqa (Yo‘q): ${fb.no}\n` +
+          `✅ To'g'ri topildi (Ha): ${fb.yes}\n` +
+          `❌ Boshqa (Yo'q): ${fb.no}\n` +
           `📌 Jami javob: ${fbTotal}`,
         { parse_mode: 'HTML' }
       );
     } catch {
       await ctx.reply('Statistika olishda xatolik.');
+    }
+  });
+
+  bot.on('my_chat_member', async (ctx) => {
+    const uid = ctx.from?.id;
+    if (!uid) return;
+    const newStatus = ctx.myChatMember?.new_chat_member?.status;
+    if (newStatus === 'kicked') {
+      await getPostgresPool().query(
+        `UPDATE users SET blocked_at = NOW() WHERE telegram_id = $1`,
+        [uid]
+      );
+    } else if (newStatus === 'member') {
+      await getPostgresPool().query(
+        `UPDATE users SET blocked_at = NULL WHERE telegram_id = $1`,
+        [uid]
+      );
     }
   });
 
@@ -147,12 +169,12 @@ async function bootstrap(): Promise<void> {
     } else {
       console.error("Noma'lum xato:", err.error);
     }
-    /** Callback allaqachon yopilmagan bo‘lsa yoki "query is too old" — qo‘shimcha xabar spam qilmaymiz */
+    /** Callback allaqachon yopilmagan bo'lsa yoki "query is too old" — qo'shimcha xabar spam qilmaymiz */
     const g = err.error instanceof GrammyError ? err.error.description : '';
     if (g.includes('query is too old') || g.includes('query ID is invalid')) return;
     if (ctx.callbackQuery) return;
     if (ctx.message) {
-      void ctx.reply('⚠️ Vaqtincha xatolik. Birozdan keyin qayta urinib ko‘ring.').catch(() => {});
+      void ctx.reply("⚠️ Vaqtincha xatolik. Birozdan keyin qayta urinib ko'ring.").catch(() => {});
     }
   });
 
@@ -161,9 +183,9 @@ async function bootstrap(): Promise<void> {
     console.log(`\n${signal} qabul qilindi — bot yopilmoqda...`);
     try {
       await bot.stop();
-      console.log('✅ Bot to\'xtatildi.');
+      console.log("✅ Bot to'xtatildi.");
     } catch (e) {
-      console.error('Bot to\'xtatishda xato:', e);
+      console.error("Bot to'xtatishda xato:", e);
     }
     process.exit(0);
   };
