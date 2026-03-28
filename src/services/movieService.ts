@@ -47,6 +47,8 @@ const SERPER_KEY = process.env.SERPER_API_KEY  || '';
 const VISION_KEY = process.env.VISION_API_KEY  || '';
 const IMGBB_KEY  = process.env.IMGBB_API_KEY   || '';
 const GEMINI_KEY = process.env.GEMINI_API_KEY  || '';
+const KP_KEY     = process.env.KINOPOISK_API_KEY || '';
+const KP_BASE    = 'https://kinopoiskapiunofficial.tech';
 /** Matnli syujet qidiruvida Google Search grounding (pulli; Serper snippetlari ixtiyoriy o‘chadi). */
 const GEMINI_GROUNDING_TEXT = process.env.GEMINI_GROUNDING_TEXT_SEARCH === 'true';
 /** Faqat Gemini (multimodal + matn + tarjima). */
@@ -77,6 +79,24 @@ function slugifyForMatch(text: string): string {
     .replace(/[^a-z0-9\u0400-\u04ff\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * Kirill, turk, arab va boshqa non-ASCII matnlar uchun to'g'ridan-to'g'ri solishtirish.
+ * normalizeTitle() ular uchun ishlamaydi (barcha non-ASCII ni o'chirib tashlaydi).
+ */
+export function titlesMatchNative(query: string, ...titles: string[]): boolean {
+  const q = query.toLowerCase().trim();
+  for (const t of titles) {
+    if (!t) continue;
+    const tc = t.toLowerCase().trim();
+    if (tc === q) return true;
+    if (tc.length >= 4 && q.includes(tc)) return true;
+    if (q.length >= 4 && tc.includes(q)) return true;
+    // titlesMatch (ASCII-normalized) ham sinab ko'ramiz
+    if (titlesMatch(q, tc)) return true;
+  }
+  return false;
 }
 
 // Stop-words that are too common to count as meaningful matches
@@ -229,8 +249,8 @@ async function tmdbPersonMovies(personName: string): Promise<TmdbResult[]> {
     return cast
       .filter(m =>
         (m.media_type === 'movie' || m.media_type === 'tv') &&
-        // Kamida 100 ta ovoz — bu obscure/behind-the-scenes kontentni filtrlab tashlaydi
-        (m.vote_count ?? 0) >= 100
+        // Kamida 10 ta ovoz — SNG/CIS (qozoq, turk, o'zbek) filmlar ham o'tishi uchun pastlatildi
+        (m.vote_count ?? 0) >= 10
       )
       .sort(sortTmdbByRelevance)
       .slice(0, PERSON_CREDITS_MAX);
@@ -294,6 +314,93 @@ async function serperSearch(query: string, gl = 'uz', hl = 'uz'): Promise<Serper
       { headers: { 'X-API-KEY': SERPER_KEY, 'Content-Type': 'application/json' }, timeout: TIMEOUT }
     );
     return r.data.organic || [];
+  } catch { return []; }
+}
+
+
+// ─── KINOPOISK ────────────────────────────────────────────────────────────────
+
+interface KpFilm {
+  filmId: number;
+  nameRu?: string;
+  nameEn?: string;
+  nameOriginal?: string;
+  type?: string;
+  year?: string | number;
+  rating?: string;
+  ratingVoteCount?: number;
+  posterUrl?: string;
+  description?: string;
+  imdbId?: string;
+  professionKey?: string;
+}
+
+/** Kinopoisk kalit-so'z bo'yicha qidiruv — SNG/CIS filmlarni ingliz bazasidan ko'ra yaxshi topadi. */
+async function kinopoiskSearch(query: string): Promise<{ film: KpFilm; type: MediaType } | null> {
+  if (!KP_KEY) return null;
+  try {
+    const r = await axios.get(`${KP_BASE}/api/v2.1/films/search-by-keyword`, {
+      params: { keyword: query, page: 1 },
+      headers: { 'X-API-KEY': KP_KEY },
+      timeout: TIMEOUT,
+    });
+    const films: KpFilm[] = r.data?.films || [];
+    if (!films.length) return null;
+
+    const toMediaType = (kpType?: string): MediaType =>
+      (kpType === 'TV_SERIES' || kpType === 'MINI_SERIES' || kpType === 'TV_SHOW') ? 'tv' : 'movie';
+
+    // Avval aniq nom mos keluvchisini qidirish
+    for (const film of films) {
+      if (titlesMatchNative(query, film.nameRu || '', film.nameEn || '', film.nameOriginal || '')) {
+        return { film, type: toMediaType(film.type) };
+      }
+    }
+    // Aniq mos kelmasa — birinchi natija (odatda eng mos keladigan)
+    return { film: films[0], type: toMediaType(films[0].type) };
+  } catch (e) {
+    console.warn('Kinopoisk search xato:', (e as Error).message?.slice(0, 60));
+    return null;
+  }
+}
+
+/** Kinopoisk filmId bo'yicha IMDB ID ni olish — TMDB/OMDB bilan ko'prik. */
+async function kinopoiskGetImdbId(filmId: number): Promise<string | null> {
+  if (!KP_KEY) return null;
+  try {
+    const r = await axios.get(`${KP_BASE}/api/v2.2/films/${filmId}`, {
+      headers: { 'X-API-KEY': KP_KEY },
+      timeout: TIMEOUT,
+    });
+    const imdbId = r.data?.imdbId;
+    if (imdbId && /^tt\d+$/i.test(String(imdbId))) return String(imdbId);
+  } catch { /* ignore */ }
+  return null;
+}
+
+/**
+ * Aktyor nomi bo'yicha Kinopoisk filmografiyasi — TMDB da topilmagan SNG aktorlar uchun fallback.
+ * Qaytarilgan filmlar nameEn/nameOriginal orqali TMDB da ham qidiriladi.
+ */
+async function kinopoiskPersonMovies(personName: string): Promise<KpFilm[]> {
+  if (!KP_KEY) return [];
+  try {
+    const personRes = await axios.get(`${KP_BASE}/api/v1/persons`, {
+      params: { name: personName, page: 1 },
+      headers: { 'X-API-KEY': KP_KEY },
+      timeout: TIMEOUT,
+    });
+    const persons: Array<{ personId: number }> = personRes.data?.items || [];
+    if (!persons[0]) return [];
+
+    const staffRes = await axios.get(`${KP_BASE}/api/v1/staff/${persons[0].personId}`, {
+      headers: { 'X-API-KEY': KP_KEY },
+      timeout: TIMEOUT,
+    });
+    const films: KpFilm[] = (staffRes.data?.films || [])
+      .filter((f: KpFilm) => !f.professionKey || f.professionKey === 'ACTOR')
+      .filter((f: KpFilm) => !f.type || f.type === 'FILM' || f.type === 'TV_SERIES' || f.type === 'MINI_SERIES');
+    return films.slice(0, 40);
   } catch { return []; }
 }
 
@@ -411,7 +518,42 @@ async function identifyByFaces(base64: string): Promise<MovieIdentified | null> 
     celebrities.slice(0, 3).map(c => tmdbPersonMovies(c.name))
   );
 
+
+  // Kinopoisk fallback: TMDB da birinchi aktyor uchun filmlar bo'sh bo'lsa
+  // (SNG/turk aktorlar TMDB da filmografiyasi cheklangan)
+  if (allFilmSets.length > 0 && allFilmSets[0].length === 0 && KP_KEY) {
+    const kpFilmSets = await Promise.all(
+      celebrities.slice(0, 3).map(async (c) => {
+        const kpFilms = await kinopoiskPersonMovies(c.name);
+        const tmdbResults: TmdbResult[] = [];
+        for (const kf of kpFilms.slice(0, 15)) {
+          const searchTitle = kf.nameEn || kf.nameOriginal || kf.nameRu || '';
+          if (!searchTitle) continue;
+          const tmdbHit = await tmdbSearch(searchTitle);
+          if (tmdbHit?.result) tmdbResults.push(tmdbHit.result);
+        }
+        return tmdbResults;
+      })
+    );
+    const kpCandidates = kpFilmSets[0];
+    if (kpCandidates.length > 0) {
+      const sortedKp = kpCandidates.sort(sortTmdbByRelevance).slice(0, FACE_CANDIDATE_LIMIT);
+      const names = celebrities.map(c => c.name).join(', ');
+      const titles = sortedKp.map(c => c.title || c.name).join(' | ');
+      console.log(`\u{1F3AC} Kinopoisk person fallback candidates: ${titles}`);
+      if (sortedKp.length === 1) {
+        const c = sortedKp[0];
+        return { title: c.title || c.name || '', type: (c.media_type === 'tv' ? 'tv' : 'movie') as MediaType, confidence: 'medium' };
+      }
+      if (GEMINI_KEY) {
+        const pickG = await geminiPickFromCandidates(base64, names, titles);
+        if (pickG) return pickG;
+      }
+    }
+  }
   if (allFilmSets.length === 0 || allFilmSets[0].length === 0) return null;
+
+
 
   // Kesishuv: bitta aktyor uchun ham natija ber, ko'p aktyor uchun esa intersection
   let candidates: TmdbResult[] = allFilmSets[0];
@@ -500,20 +642,30 @@ async function identifyByGemini(base64: string): Promise<MovieIdentified | null>
         {
           inlineData: { data: base64, mimeType: 'image/jpeg' },
         },
-        `You are an expert in world cinema including Turkish, Korean, Hollywood, Russian, and Uzbek films.
+        `You are an expert in world cinema including Hollywood, Turkish, Korean, Russian, Uzbek, Kazakh, Kyrgyz, Tajik, Azerbaijani, and other CIS/SNG country films.
 
 Identify the EXACT movie or TV show in this screenshot.
 
 Key clues to analyze:
 1. Actors' faces — recognize them if possible
-2. Costumes and clothing style (prison uniform? Ottoman period? Modern?)  
-3. Setting and location (prison cell? Village? Istanbul?)
-4. Any visible text (subtitles, watermarks, logos) — ignore social media app UI
-5. Scene emotion and context
+2. Costumes and clothing style (prison uniform? Ottoman period? Steppe/nomad? Modern?)
+3. Setting and location (prison cell? Kazakh steppe? Central Asian village? Istanbul bazaar?)
+4. Any visible text (subtitles, watermarks, logos in any language including Cyrillic, Latin, Arabic) — ignore social media app UI
+5. Language of subtitles or on-screen text if visible
+6. Scene emotion and context
+7. Film production style (Hollywood budget? Low-budget CIS production? Turkish TV quality?)
 
-For Turkish prison dramas with an innocent/simple man: consider "7. Koğuştaki Mucize".
-For Turkish historical: consider "Diriliş: Ertuğrul", "Kuruluş: Osman".
-For Turkish crime: consider "Çukur", "Ezel", "Kara Para Aşk".
+CIS/SNG film hints:
+- Kazakh cinema: "Nomad", "Tulpan", "The Gift to Stalin", "Myn Bala", "Kazakh Khanate" series, Kazakhfilm productions
+- Kyrgyz cinema: "The Adopted Son", works by Aktan Arym Kubat
+- Uzbek cinema: Uzbekfilm productions, "Ali Baba va 40 qaroqchilar" and similar
+- Azerbaijani cinema: Azerbaijanfilm productions
+
+Turkish film hints:
+- Prison dramas with innocent/simple man: consider "7. Koğuştaki Mucize"
+- Historical Ottoman: "Diriliş: Ertuğrul", "Kuruluş: Osman", "Payitaht Abdülhamid"
+- Crime/thriller: "Çukur", "Ezel", "Kara Para Aşk", "Sen Anlat Karadeniz"
+- Modern drama: "Fatih Harbiye", "Kuzey Güney"
 
 Respond ONLY with JSON:
 {"title": "Exact title or unknown", "type": "movie" or "tv", "confidence": "high/medium/low", "reasoning": "brief explanation"}
@@ -569,8 +721,15 @@ async function cropFrame(base64: string): Promise<string> {
 // ─── GEMINI BILAN TASDIQLASH ─────────────────────────────────────────────────
 
 /** Faqat aniq "match": true bo'lsa true — taxminni rad etish uchun "fail-closed". */
-async function geminiVerify(base64: string, candidateTitle: string, mimeType: string): Promise<boolean> {
-  if (!GEMINI_KEY) return false;
+interface VerifyResult {
+  match: boolean;
+  /** Verify false bo'lsa lekin Gemini boshqa aniq sarlavha bilsa — shu yerda qaytariladi */
+  alternativeTitle?: string;
+  alternativeType?: MediaType;
+}
+
+async function geminiVerify(base64: string, candidateTitle: string, mimeType: string): Promise<VerifyResult> {
+  if (!GEMINI_KEY) return { match: false };
   try {
     const genAI = new GoogleGenerativeAI(GEMINI_KEY);
     const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
@@ -587,20 +746,35 @@ CRITICAL RULES:
 4. If "${candidateTitle}" is a documentary / behind-the-scenes / book about cinema (not a narrative film), answer false
 5. Answer true ONLY if you are confident this frame is from "${candidateTitle}" — not from a similar title, sequel, or different film with the same actor
 6. Answer false if: image quality is too poor, scene could plausibly be from several different films, wrong medium (e.g. cartoon vs live-action), or you have meaningful doubt
+7. If match is false but you are CONFIDENT you know the EXACT correct title, fill in "alternativeTitle" and "alternativeType". Only fill these if you are certain — leave empty strings if unsure.
 
-Answer ONLY with JSON: {"match": true} or {"match": false, "reason": "brief explanation"}`,
+Answer ONLY with JSON:
+{"match": true} 
+or
+{"match": false, "reason": "brief explanation", "alternativeTitle": "Exact title or empty string", "alternativeType": "movie or tv or empty string"}`,
         },
       ])
     );
     const text = result.response.text();
     const m = text.match(/\{[\s\S]*?\}/);
-    if (!m) return false;
-    const parsed = JSON.parse(m[0]) as { match?: boolean; reason?: string };
+    if (!m) return { match: false };
+    const parsed = JSON.parse(m[0]) as {
+      match?: boolean;
+      reason?: string;
+      alternativeTitle?: string;
+      alternativeType?: string;
+    };
     const ok = parsed.match === true;
-    console.log(`🔍 Gemini verify "${candidateTitle}": ${ok} — ${parsed.reason || ''}`);
-    return ok;
+    const alt = (parsed.alternativeTitle || '').trim();
+    const altType: MediaType = parsed.alternativeType === 'tv' ? 'tv' : 'movie';
+    console.log(`🔍 Gemini verify "${candidateTitle}": ${ok} — ${parsed.reason || ''}${alt ? ` | alt: "${alt}"` : ''}`);
+    return {
+      match: ok,
+      alternativeTitle: alt || undefined,
+      alternativeType: alt ? altType : undefined,
+    };
   } catch {
-    return false;
+    return { match: false };
   }
 }
 
@@ -696,13 +870,26 @@ export async function identifyMovie(base64: string, mimeType: string): Promise<M
   }
 
   const MAX_VERIFY = 8;
+  let lastAlternative: MovieIdentified | null = null;
+
   for (let i = 0; i < Math.min(ordered.length, MAX_VERIFY); i++) {
     const cand = ordered[i];
-    const ok = (await withTimeout(geminiVerify(croppedBase64, cand.title, cropMime))) === true;
-    if (ok) {
+    const verifyRes = await withTimeout(geminiVerify(croppedBase64, cand.title, cropMime));
+    if (verifyRes?.match) {
       console.log('✅ Tasdiqlangan:', cand.title);
       return cand;
     }
+    // Verify false bo'lsa lekin Gemini aniq alternativ sarlavha bilsa — saqlab qo'yamiz
+    if (verifyRes?.alternativeTitle && !lastAlternative) {
+      lastAlternative = { title: verifyRes.alternativeTitle, type: verifyRes.alternativeType ?? cand.type };
+      console.log('💡 Gemini alternativ taklif:', lastAlternative.title);
+    }
+  }
+
+  // Hech bir nomzod tasdiqlanmadi, lekin Gemini alternativ bilsa — uni qaytaramiz
+  if (lastAlternative) {
+    console.log('✅ Alternativ sarlavha bilan qaytarildi:', lastAlternative.title);
+    return lastAlternative;
   }
 
   console.log('⚠️ Hech bir nomzod Gemini tasdiqidan o\'tmadi');
@@ -756,13 +943,17 @@ Answer ONLY "yes" or "no".`
 }
 
 async function identifyBySerper(query: string): Promise<MovieIdentified | null> {
-  const searchResults = await serperSearch(`${query} movie imdb`);
-  for (const res of searchResults) {
+  // Birinchi inglizcha qidiruv, keyin rus tilidagi (SNG filmlar uchun)
+  const [enResults, ruResults] = await Promise.all([
+    serperSearch(`${query} movie imdb`),
+    serperSearch(`${query} фильм imdb`, 'ru', 'ru'),
+  ]);
+  for (const res of [...enResults, ...ruResults]) {
     const m = res.link.match(/imdb\.com\/title\/(tt\d+)/);
     if (!m) continue;
     const found = await omdbById(m[1]);
     if (!found) continue;
-    if (titlesMatch(query, found.title)) {
+    if (titlesMatchNative(query, found.title)) {
       return { title: found.title, type: found.type };
     }
   }
@@ -792,9 +983,13 @@ export async function identifyFromTextDetailed(query: string): Promise<IdentifyF
     const tmdb = await tmdbSearch(query);
     if (tmdb?.result) {
       const tmdbTitle = tmdb.result.title || tmdb.result.name || '';
+      const tmdbOrigTitle = tmdb.result.original_title || tmdb.result.original_name || '';
       const voteCount = tmdb.result.vote_count ?? 0;
-      if (titlesMatch(query, tmdbTitle) || voteCount >= 500) {
-        return found({ title: tmdbTitle, type: tmdb.type });
+      // SNG/CIS filmlar uchun: original_title (kirill/turk) bilan ham solishtirish + threshold 50 ga tushirildi
+      const queryMatches = titlesMatchNative(query, tmdbTitle, tmdbOrigTitle);
+      if (queryMatches || voteCount >= 50) {
+        // Agar inglizcha sarlavha bo'sh bo'lsa, original sarlavhani ishlatamiz
+        return found({ title: tmdbTitle || tmdbOrigTitle, type: tmdb.type });
       }
     }
   }
@@ -812,6 +1007,26 @@ export async function identifyFromTextDetailed(query: string): Promise<IdentifyF
     return found(serper);
   }
 
+
+  // 2c. Kinopoisk — SNG/CIS/turk filmlar uchun asosiy fallback (OMDB/TMDB topilmasa)
+  if (KP_KEY && words.length <= 5) {
+    const kp = await kinopoiskSearch(query);
+    if (kp) {
+      const kpTitle = kp.film.nameEn || kp.film.nameOriginal || kp.film.nameRu || '';
+      console.log(`\u{1F3AC} Kinopoisk hit: "${kpTitle}" (${kp.film.filmId})`);
+      const kpImdbId = await kinopoiskGetImdbId(kp.film.filmId);
+      if (kpImdbId) {
+        const omdbRes = await omdbById(kpImdbId);
+        if (omdbRes) return found({ title: omdbRes.title, type: omdbRes.type });
+        const tmdbRes = await tmdbByImdbId(kpImdbId);
+        if (tmdbRes) {
+          return found({ title: tmdbRes.result.title || tmdbRes.result.name || kpTitle, type: tmdbRes.type });
+        }
+      }
+      if (kpTitle) return found({ title: kpTitle, type: kp.type });
+    }
+  }
+
   // 3. Serper konteksti + LLM — uzun tavsiflar
   if (!GEMINI_KEY) return notFound();
 
@@ -822,8 +1037,8 @@ export async function identifyFromTextDetailed(query: string): Promise<IdentifyF
     ? '(Google Search grounding yoqilgan — qidiruv model ichida)'
     : contextResults.slice(0, 3).map(r => `${r.title}: ${r.snippet}`).join('\n\n');
 
-  const llmPrompt = `You are a professional movie expert. Identify the exact movie/TV show from this USER query.
-The user might be describing a specific scene, plot, or character they remember.
+  const llmPrompt = `You are a professional world cinema expert with deep knowledge of Hollywood, Turkish, Korean, Russian, Kazakh, Kyrgyz, Uzbek, Azerbaijani, Tajik, and other CIS/SNG cinema. You also know Bollywood, Iranian, and Arab cinema.
+The user (Uzbek-speaking) might be describing a specific scene, plot, or character they remember. The film could be from ANY country.
 
 USER QUERY: "${query}"
 GOOGLE SEARCH CONTEXT (clues):
@@ -831,13 +1046,16 @@ ${snippets}
 
 Rules:
 1. Match the USER'S FULL PLOT, not only loose keywords. Example: "robot" + "love" appears in many works — pick the one whose ENTIRE scenario fits (setting, premise, ending).
-2. Prefer a single famous FEATURE FILM over an anthology TV series when the description is one continuous story (e.g. obese passive humans floating in chairs + one main small robot + Earth/space ship setting → the Pixar film "WALL-E", NOT "Love, Death & Robots" unless they clearly describe that anthology's format).
-3. Provide the exact ORIGINAL English title (e.g. "WALL-E", not a translated title).
-4. DO NOT translate the movie title literally into Uzbek.
-5. If two titles share words but only one matches the plot details, choose that one. If still ambiguous, use confidence "medium" or "low".
+2. Prefer a single famous FEATURE FILM over an anthology TV series when the description is one continuous story.
+3. For CIS/SNG films: provide the most widely known title — could be Russian, Kazakh, Turkish, or English depending on which is most searchable. Example: Kazakh film "Nomad" is better than its Kazakh title "Көшпенділер".
+4. For Turkish films/series: provide the original Turkish title (e.g. "Diriliş: Ertuğrul", not translated).
+5. For Hollywood/international: provide the original English title.
+6. DO NOT translate the movie title literally into Uzbek.
+7. If the description sounds like a CIS/Central Asian film (steppe landscape, nomad culture, Soviet-era setting, collective farm, etc.) — consider CIS cinema first.
+8. If two titles share words but only one matches the plot details, choose that one. If still ambiguous, use confidence "medium" or "low".
 
 Respond ONLY with this JSON structure:
-{"title": "Original English Title", "type": "movie" or "tv", "confidence": "high/medium/low"}`;
+{"title": "Most searchable title for this film", "type": "movie" or "tv", "confidence": "high/medium/low"}`;
 
   try {
     const genAI = new GoogleGenerativeAI(GEMINI_KEY);
@@ -880,9 +1098,11 @@ Respond ONLY with this JSON structure:
       const tmdbVerified = !verifiedTitle ? await tmdbSearch(p.title) : null;
       if (tmdbVerified?.result) {
         const tmdbTitle = tmdbVerified.result.title || tmdbVerified.result.name || '';
+        const tmdbOrigTitle = tmdbVerified.result.original_title || tmdbVerified.result.original_name || '';
         tmdbOverview = tmdbVerified.result.overview || null;
-        if (titlesMatch(p.title, tmdbTitle) || (tmdbVerified.result.vote_count ?? 0) >= 1000) {
-          verifiedTitle = tmdbTitle;
+        // SNG/CIS filmlar uchun: original_title (kirill/turk) bilan ham solishtirish, threshold 100 ga tushirildi
+        if (titlesMatchNative(p.title, tmdbTitle, tmdbOrigTitle) || (tmdbVerified.result.vote_count ?? 0) >= 100) {
+          verifiedTitle = tmdbTitle || tmdbOrigTitle;
           verifiedType = tmdbVerified.type;
         }
       }
@@ -1241,7 +1461,8 @@ export async function getMovieDetails(identified: MovieIdentified): Promise<Movi
     if (found) {
       const rt = found.result.title || found.result.name || '';
       const ro = found.result.original_title || found.result.original_name || '';
-      if (titlesMatch(title, rt) || titlesMatch(title, ro)) {
+      // SNG/CIS filmlar uchun: kirill/turk sarlavhalarini ham solishtirish
+      if (titlesMatchNative(title, rt, ro)) {
         tmdbResult = found.result;
       } else {
         imdbId = null;
