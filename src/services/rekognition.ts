@@ -32,7 +32,7 @@ export async function recognizeCelebrities(imageBase64: string): Promise<Celebri
     const celebrities = response.CelebrityFaces || [];
 
     return celebrities
-      .filter(c => (c.MatchConfidence ?? 0) >= 70 && c.Name)
+      .filter(c => (c.MatchConfidence ?? 0) >= 82 && c.Name)
       .map(c => ({
         name: c.Name!,
         confidence: c.MatchConfidence ?? 0,

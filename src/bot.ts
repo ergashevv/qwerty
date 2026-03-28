@@ -31,7 +31,7 @@ async function bootstrap(): Promise<void> {
   try {
     await initPostgresSchema();
     await pruneUserActivityHistory();
-    if (await pingPostgres()) console.log('✅ Postgres (Neon) tayyor');
+    if (await pingPostgres()) console.log('✅ Postgres tayyor');
     await runAnalyticsRetention();
   } catch (e) {
     console.error('❌ Postgres:', (e as Error).message);

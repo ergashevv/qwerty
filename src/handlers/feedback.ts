@@ -36,7 +36,7 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
    * DB sekin bo‘lsa — "query is too old", foydalanuvchi hech narsa ko‘rmaydi.
    * Avvalo callback ni yopamiz (matnsiz — ikkinchi bosishda noto‘g‘ri "Rahmat" chiqmasin).
    */
-  await ctx.answerCallbackQuery();
+  await ctx.answerCallbackQuery(vote === 'y' ? { text: 'Rahmat ❤️' } : {});
 
   let row;
   try {
@@ -90,5 +90,10 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
 
   if (correct) {
     await maybeDonateAfterFeedbackYes(ctx).catch(() => {});
+  } else {
+    await ctx.reply(
+      '📸 Boshqa kadr yoki boshqa sahna bilan sinab ko\'ring\n' +
+      '✍️ Yoki filmni so\'zlar bilan tasvirlab yozing',
+    ).catch(() => {});
   }
 }
