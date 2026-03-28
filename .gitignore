@@ -3,3 +3,8 @@ dist/
 .env
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
+test_final.ts
+logs/
+*.log

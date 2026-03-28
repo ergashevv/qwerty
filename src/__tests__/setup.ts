@@ -4,3 +4,7 @@ process.env.OMDB_API_KEY = 'test_omdb_key';
 process.env.SERPER_API_KEY = 'test_serper_key';
 process.env.GEMINI_API_KEY = 'test_gemini_key';
 process.env.BOT_TOKEN = 'test_bot_token';
+
+// Unset DATABASE_URL so describeDb = describe.skip in unit tests.
+// DB tests require a live Postgres connection — they run via npm run test:integration.
+delete process.env.DATABASE_URL;

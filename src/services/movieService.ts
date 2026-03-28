@@ -56,12 +56,16 @@ const TIMEOUT    = 8000;
 // ─── YORDAMCHI ───────────────────────────────────────────────────────────────
 
 export function normalizeTitle(t: string): string {
-  return t.toLowerCase()
-    .replace(/[ʻʼ'`‘·]/g, '\'') // Standartlashtirish
-    .replace(/[^a-z0-9\s']/g, ' ') // Har qanday boshqa belgilarni bo'shliq bilan almashtirish
-    .replace(/\s*\(\d{4}.*?\)/g, '')
+  // Year parens and source markers must be stripped BEFORE the special-char replacement,
+  // because that step converts ( ) — | into spaces, preventing the patterns from matching.
+  return t
+    .replace(/\s*\(\d{4}[^)]*\)/g, '')
     .replace(/\s*[-–—|]\s*(wikipedia|imdb|rotten|letterboxd).*/i, '')
-    .replace(/\s+/g, ' ').trim();
+    .toLowerCase()
+    .replace(/[ʻʼ'\`‘·]/g, "'")
+    .replace(/[^a-z0-9\s']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function slugifyForMatch(text: string): string {
@@ -89,12 +93,11 @@ export function titlesMatch(a: string, b: string): boolean {
   if (!na || !nb) return false;
   if (na === nb) return true;
 
-  // includes() check: require the shorter string to be at least 6 chars
-  // to avoid false positives from short common words like "iron", "man", "the"
+  // includes() check: shorter must be >= 6 chars to avoid false positives from
+  // short common words ("man", "iron", "the"). 6+ chars like "Avengers" pass.
   const shorter = na.length <= nb.length ? na : nb;
   const longer  = na.length <= nb.length ? nb : na;
-  // Exact substring match (only for long strings)
-  if (shorter.length >= 10 && longer.includes(shorter)) return true;
+  if (shorter.length >= 6 && longer.includes(shorter)) return true;
 
   // Jaccard similarity on meaningful tokens (strip stop-words)
   const tok = (s: string) => s

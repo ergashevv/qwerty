@@ -50,10 +50,11 @@ export async function handleText(ctx: Context): Promise<void> {
     await incrementUserRequests(userId);
   }
 
-  await recordSearchRequest(userId, 'text', { queryText: text });
-
+  // Foydalanuvchiga darhol javob ko'rsatish — limit tekshiruvidan oldin ham
   const processing = await ctx.reply('🔍 Qidirilmoqda...');
   void ctx.api.sendChatAction(ctx.chat!.id, 'typing');
+
+  await recordSearchRequest(userId, 'text', { queryText: text });
 
   try {
     const idOutcome = await withRotatingStatus(

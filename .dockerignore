@@ -4,3 +4,12 @@ dist
 .env
 *.md
 **/__tests__
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+test_final.ts
+logs/
+*.log
+.env.*
+!.env.example

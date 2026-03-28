@@ -10,8 +10,8 @@ module.exports = {
       testMatch: ['<rootDir>/src/__tests__/**/*.test.ts'],
       testPathIgnorePatterns: ['<rootDir>/src/__tests__/integration.test.ts'],
       setupFiles: [
-        '<rootDir>/src/__tests__/setup.ts',
         'dotenv/config',
+        '<rootDir>/src/__tests__/setup.ts',
       ],
       transform: {
         '^.+\\.tsx?$': ['ts-jest', {

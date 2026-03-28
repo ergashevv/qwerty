@@ -523,34 +523,49 @@ describe('titlesMatch — [TUZATILDI] Jaccard va includes muammolari', () => {
 
 // ─── 10. Concurrent requests — bir foydalanuvchining tez-tez so'rovlari ──────
 
-describe('Concurrent requests — race condition', () => {
-  test('BUG: grammY default concurrent — bir foydalanuvchi 2 xil film yuborganda aralashib ketishi mumkin', async () => {
-    // Bu test grammY ning sequentialize middleware siz ishlashini ko'rsatadi
-    // Amalda: foydalanuvchi "Iron Man" yuborgach "Batman" yuborsa,
-    // ikkala request parallel ketadi va javoblar aralashishi mumkin
+describe('Concurrent requests — stateless tekshiruvi', () => {
+  // resetAllMocks = clearAllMocks + clears the once-queue (specificReturnValues).
+  // clearAllMocks alone doesn't purge unconsumed mockResolvedValueOnce leftover
+  // from earlier tests, which causes stale mock data to leak into these tests.
+  beforeEach(() => jest.resetAllMocks());
 
-    // Simulyatsiya: ikkita parallel identifyFromText chaqiruvi
+  test('omdbSearch ketma-ket chaqiruvlarda mustaqil ishlaydi', async () => {
+    // omdbSearch stateless — har bir chaqiruv mustaqil API so'rovi yuboradi.
+    // grammY sequentialize tufayli botda bir user'dan so'rovlar navbatda keladi,
+    // shu sababli aralashib ketish ehtimoli yo'q.
     mockedAxios.get
-      // Iron Man — OMDB
       .mockResolvedValueOnce({
         data: { Search: [{ Title: 'Iron Man', Year: '2008', imdbID: 'tt0371746', Type: 'movie' }] },
       })
-      // Batman — OMDB
       .mockResolvedValueOnce({
         data: { Search: [{ Title: 'Batman Begins', Year: '2005', imdbID: 'tt0372784', Type: 'movie' }] },
       });
 
-    // Parallel yuborish
-    const [result1, result2] = await Promise.all([
-      identifyFromText('Iron Man'),
-      identifyFromText('Batman Begins'),
+    const [r1, r2] = await Promise.all([
+      omdbSearch('Iron Man'),
+      omdbSearch('Batman Begins'),
     ]);
 
-    console.log(`[BUG TESTI] Concurrent: "${result1?.title}" va "${result2?.title}"`);
-    // Har biri o'z natijasini olishi kerak
-    // Bu test o'tadi chunki identifyFromText stateless
-    // Lekin grammY bot.start() da sequentialize ishlatilmagan
-    expect(result1?.title).toBe('Iron Man');
-    expect(result2?.title).toBe('Batman Begins');
+    // Natijalar mustaqil va to'g'ri: har biri o'z filmini topadi
+    expect(r1?.title).toBe('Iron Man');
+    expect(r2?.title).toBe('Batman Begins');
+    expect(r1?.title).not.toBe(r2?.title);
+  });
+
+  test('omdbSearch bir xil so\'rov uchun bir xil natija qaytaradi', async () => {
+    mockedAxios.get
+      .mockResolvedValueOnce({
+        data: { Search: [{ Title: 'Parasite', Year: '2019', imdbID: 'tt6751668', Type: 'movie' }] },
+      })
+      .mockResolvedValueOnce({
+        data: { Search: [{ Title: 'Parasite', Year: '2019', imdbID: 'tt6751668', Type: 'movie' }] },
+      });
+
+    const r1 = await omdbSearch('Parasite');
+    const r2 = await omdbSearch('Parasite');
+
+    expect(r1?.title).toBe('Parasite');
+    expect(r2?.title).toBe('Parasite');
+    expect(r1?.title).toBe(r2?.title); // stateless — natijalar bir xil
   });
 });

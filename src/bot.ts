@@ -40,6 +40,20 @@ async function bootstrap(): Promise<void> {
 
   const bot = new Bot(botToken);
 
+  /**
+   * Callback query'lar sequentialize dan OLDIN ishlov olishi kerak.
+   * Sabab: sequentialize bir user'dan kelgan barcha update'larni navbatga qo'yadi.
+   * Agar foto/matn 15-20 sek ishlayotgan bo'lsa, user ✅/❌ tugmasini bosganda
+   * callback query ham navbatda kutadi → 10 sek o'tgach Telegram "query is too old" beradi.
+   */
+  bot.callbackQuery(/^donate:/, async (ctx) => {
+    await handleDonateCallback(ctx);
+  });
+
+  bot.callbackQuery(/^fb:/, async (ctx) => {
+    await handleIdentificationFeedback(ctx);
+  });
+
   bot.use(sequentialize((ctx) => ctx.from?.id?.toString() ?? 'unknown'));
 
   bot.command('start', async (ctx) => {
@@ -123,14 +137,6 @@ async function bootstrap(): Promise<void> {
 
   bot.on('message:text', handleText);
 
-  bot.callbackQuery(/^donate:/, async (ctx) => {
-    await handleDonateCallback(ctx);
-  });
-
-  bot.callbackQuery(/^fb:/, async (ctx) => {
-    await handleIdentificationFeedback(ctx);
-  });
-
   bot.catch((err) => {
     const ctx = err.ctx;
     console.error(`Bot xato (update ${ctx.update.update_id}):`);
@@ -150,9 +156,28 @@ async function bootstrap(): Promise<void> {
     }
   });
 
+  // Railway / Docker SIGTERM/SIGINT — botni tozalab yopish
+  const shutdown = async (signal: string): Promise<void> => {
+    console.log(`\n${signal} qabul qilindi — bot yopilmoqda...`);
+    try {
+      await bot.stop();
+      console.log('✅ Bot to\'xtatildi.');
+    } catch (e) {
+      console.error('Bot to\'xtatishda xato:', e);
+    }
+    process.exit(0);
+  };
+
+  process.once('SIGTERM', () => void shutdown('SIGTERM'));
+  process.once('SIGINT',  () => void shutdown('SIGINT'));
+
   console.log('🤖 Kinova Bot ishga tushmoqda...');
   await bot.start({
     onStart: (info) => console.log(`✅ Bot ishga tushdi: @${info.username}`),
+    // Bot qayta ishlaganda Telegram eski (allaqachon muddati o'tgan) update'larni
+    // yuboradi — callback query'lar darhol "query is too old" beradi.
+    // Bu parametr restart paytidagi eski update'larni tashlab ketadi.
+    drop_pending_updates: true,
   });
 }
 

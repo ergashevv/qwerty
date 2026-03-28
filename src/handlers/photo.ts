@@ -37,6 +37,10 @@ export async function handlePhoto(ctx: Context): Promise<void> {
 
   if (!userId) return;
 
+  // Foydalanuvchiga darhol javob ko'rsatish — DB operatsiyalarini kutmasdan
+  const processing = await ctx.reply('🔍 Qidirilmoqda...');
+  void ctx.api.sendChatAction(ctx.chat!.id, 'typing');
+
   await upsertUser(userId, username, firstName);
   await recordUserActivityDay(userId);
 
@@ -44,7 +48,9 @@ export async function handlePhoto(ctx: Context): Promise<void> {
   if (!photoGate.ok) {
     if (photoGate.reason === 'burst') {
       const m = Math.round(PHOTO_BURST_WINDOW_SECONDS / 60);
-      await ctx.reply(
+      await ctx.api.editMessageText(
+        ctx.chat!.id,
+        processing.message_id,
         `⏳ Juda tez-tez rasm yuboryapsiz.\n\n` +
           `Bitta filmni topish uchun 3–4 ta kadr yuborishingiz mumkin — ` +
           `lekin ${m} daqiqada maksimal <b>${PHOTO_BURST_LIMIT}</b> ta rasm.\n` +
@@ -52,7 +58,9 @@ export async function handlePhoto(ctx: Context): Promise<void> {
         { parse_mode: 'HTML' }
       );
     } else {
-      await ctx.reply(
+      await ctx.api.editMessageText(
+        ctx.chat!.id,
+        processing.message_id,
         `⚠️ Kunlik rasm limiti tugadi (<b>${PHOTO_DAILY_LIMIT}</b> ta / kun).\n` +
           `Ertaga yana foydalanishingiz mumkin.`,
         { parse_mode: 'HTML' }
@@ -62,9 +70,6 @@ export async function handlePhoto(ctx: Context): Promise<void> {
   }
 
   await recordPhotoRequest(userId);
-
-  const processing = await ctx.reply('🔍 Qidirilmoqda...');
-  void ctx.api.sendChatAction(ctx.chat!.id, 'typing');
 
   try {
     // Telegram dan eng katta o'lchamdagi rasmni olish
