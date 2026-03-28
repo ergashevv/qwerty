@@ -131,6 +131,17 @@ export function cacheEntryMatchesIdentified(
   return false;
 }
 
+/** movie_cache da watch_links bo‘sh [] bo‘lsa, eski bug’dan qolgan — qayta getMovieDetails chaqiriladi. */
+export function cachedWatchLinksNonEmpty(watchLinksJson: string | null | undefined): boolean {
+  if (!watchLinksJson) return false;
+  try {
+    const arr = JSON.parse(watchLinksJson) as unknown;
+    return Array.isArray(arr) && arr.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 export function isNoisyTitle(title: string): boolean {
   return /\b(music video|official video|lyrics|ft\.|feat\.|vevo|trailer)\b/i.test(title);
 }
@@ -1016,7 +1027,11 @@ function isLinkRelevantToMovie(
   result: SerperResult,
   allTitles: string[],
   year: string,
+  imdbId?: string | null,
 ): boolean {
+  const blob = `${result.title || ''} ${result.snippet || ''} ${result.link}`.toLowerCase();
+  if (imdbId && /^tt\d+$/i.test(imdbId) && blob.includes(imdbId.toLowerCase())) return true;
+
   let urlPath = '';
   try {
     urlPath = decodeURIComponent(new URL(result.link).pathname).replace(/[-_./]/g, ' ');
@@ -1060,7 +1075,63 @@ function isLinkRelevantToMovie(
     }
   }
 
+  const primaryLatin = allTitles.find(t => /[a-z]/i.test(t));
+  if (primaryLatin) {
+    const longTok = slugifyForMatch(primaryLatin).split(/\s+/).filter(w => w.length >= 6 && !STOP_WORDS.has(w));
+    for (const w of longTok) {
+      if (haystack.includes(w)) return true;
+    }
+  }
+
   return false;
+}
+
+function collectWatchLinksFromResults(
+  items: SerperResult[],
+  seen: Set<string>,
+  finalLinks: WatchLink[],
+  allTitles: string[],
+  year: string,
+  imdbId: string | null | undefined,
+  tag: string,
+  ruSuffix: boolean,
+  maxAdd: number,
+): void {
+  const startLen = finalLinks.length;
+  for (const item of items) {
+    if (finalLinks.length >= 5) break;
+    if (!isAllowedWatchUrl(item.link, item.title)) continue;
+    const host = canonHost(item.link);
+    if (seen.has(host)) continue;
+    if (!isLinkRelevantToMovie(item, allTitles, year, imdbId)) {
+      console.log(`🔗 Skipped (${tag}): ${host} — "${item.title?.slice(0, 60)}"`);
+      continue;
+    }
+    seen.add(host);
+    const t = item.title.length > 50 && ruSuffix ? host : item.title;
+    finalLinks.push({ title: t, link: item.link, source: ruSuffix ? `${host} (RU)` : host });
+    if (maxAdd > 0 && finalLinks.length - startLen >= maxAdd) break;
+  }
+}
+
+/** Qat'iy filtr hech narsa qoldirmasa: qidiruv natijasidagi birinchi ruxsat etilgan havolalar (kinopoisk/ru odatda lotin sarlavha bermaydi). */
+function relaxedFillFromResults(
+  uzResults: SerperResult[],
+  ruResults: SerperResult[],
+  seen: Set<string>,
+  finalLinks: WatchLink[],
+): void {
+  for (const item of [...uzResults, ...ruResults]) {
+    if (finalLinks.length >= 4) break;
+    if (!isAllowedWatchUrl(item.link, item.title)) continue;
+    const host = canonHost(item.link);
+    if (seen.has(host)) continue;
+    seen.add(host);
+    const ru = /[а-яё]/i.test(item.title || '') && !/[a-z]{4,}/i.test(item.title || '');
+    const t = (item.title || '').length > 50 ? host : item.title;
+    finalLinks.push({ title: t, link: item.link, source: ru ? `${host} (RU)` : host });
+    console.log(`🔗 Relaxed (title-only search match): ${host}`);
+  }
 }
 
 async function findWatchLinks(
@@ -1068,6 +1139,7 @@ async function findWatchLinks(
   originalTitle: string,
   year: string,
   uzTitle?: string,
+  imdbId?: string | null,
 ): Promise<WatchLink[]> {
   const a = (originalTitle || '').trim();
   const b = (englishDisplayTitle || '').trim();
@@ -1090,10 +1162,16 @@ async function findWatchLinks(
   const qUzT1 = needUzTitleSearch ? `${uz} o'zbek tilida` : null;
   const qUzT2 = needUzTitleSearch ? `${uz} ${year} o'zbek tilida` : null;
 
+  const tt = imdbId && /^tt\d+$/i.test(imdbId) ? imdbId : null;
+  const qImdbUz = tt ? `${tt} o'zbek tilida` : null;
+  const qImdbRu = tt ? `${tt} смотреть онлайн` : null;
+
   const settle = (r: PromiseSettledResult<SerperResult[]>) =>
     r.status === 'fulfilled' ? r.value : [];
 
-  const [resUz1, resUz2, resUz3, resRu, resUzAlt, resUzT1, resUzT2] = await Promise.allSettled([
+  const [
+    resUz1, resUz2, resUz3, resRu, resUzAlt, resUzT1, resUzT2, resImdbUz, resImdbRu,
+  ] = await Promise.allSettled([
     serperSearch(qUz1, 'uz', 'uz'),
     serperSearch(qUz2, 'uz', 'uz'),
     serperSearch(qUz3, 'uz', 'uz'),
@@ -1101,30 +1179,22 @@ async function findWatchLinks(
     qUzAlt ? serperSearch(qUzAlt, 'uz', 'uz') : Promise.resolve([] as SerperResult[]),
     qUzT1 ? serperSearch(qUzT1, 'uz', 'uz') : Promise.resolve([] as SerperResult[]),
     qUzT2 ? serperSearch(qUzT2, 'uz', 'uz') : Promise.resolve([] as SerperResult[]),
+    qImdbUz ? serperSearch(qImdbUz, 'uz', 'uz') : Promise.resolve([] as SerperResult[]),
+    qImdbRu ? serperSearch(qImdbRu, 'ru', 'ru') : Promise.resolve([] as SerperResult[]),
   ]);
 
   const uzResults = [
+    ...settle(resImdbUz),
     ...settle(resUzT1), ...settle(resUzT2),
     ...settle(resUz1), ...settle(resUz2), ...settle(resUz3),
     ...settle(resUzAlt),
   ];
-  const ruResults = settle(resRu);
+  const ruResults = [...settle(resImdbRu), ...settle(resRu)];
 
   const seen = new Set<string>();
   const finalLinks: WatchLink[] = [];
 
-  for (const item of uzResults) {
-    if (!isAllowedWatchUrl(item.link, item.title)) continue;
-    const host = canonHost(item.link);
-    if (seen.has(host)) continue;
-    if (!isLinkRelevantToMovie(item, allTitles, year)) {
-      console.log(`🔗 Skipped (uz): ${host} — "${item.title?.slice(0, 60)}"`);
-      continue;
-    }
-    seen.add(host);
-    finalLinks.push({ title: item.title, link: item.link, source: host });
-    if (finalLinks.length >= 3) break;
-  }
+  collectWatchLinksFromResults(uzResults, seen, finalLinks, allTitles, year, imdbId, 'uz', false, 3);
 
   const ruCountLimit = finalLinks.length === 0 ? 3 : 2;
   let ruAdded = 0;
@@ -1132,7 +1202,7 @@ async function findWatchLinks(
     if (!isAllowedWatchUrl(item.link, item.title)) continue;
     const host = canonHost(item.link);
     if (seen.has(host)) continue;
-    if (!isLinkRelevantToMovie(item, allTitles, year)) {
+    if (!isLinkRelevantToMovie(item, allTitles, year, imdbId)) {
       console.log(`🔗 Skipped (ru): ${host} — "${item.title?.slice(0, 60)}"`);
       continue;
     }
@@ -1144,15 +1214,11 @@ async function findWatchLinks(
   }
 
   if (finalLinks.length < 4) {
-    for (const item of uzResults) {
-      if (finalLinks.length >= 5) break;
-      const host = canonHost(item.link);
-      if (seen.has(host)) continue;
-      if (!isAllowedWatchUrl(item.link, item.title)) continue;
-      if (!isLinkRelevantToMovie(item, allTitles, year)) continue;
-      seen.add(host);
-      finalLinks.push({ title: item.title, link: item.link, source: host });
-    }
+    collectWatchLinksFromResults(uzResults, seen, finalLinks, allTitles, year, imdbId, 'uz-fill', false, 0);
+  }
+
+  if (finalLinks.length === 0) {
+    relaxedFillFromResults(uzResults, ruResults, seen, finalLinks);
   }
 
   return finalLinks.slice(0, 5);
@@ -1209,7 +1275,7 @@ export async function getMovieDetails(identified: MovieIdentified): Promise<Movi
   const uzTitle = await translateTitle(displayTitle, originalTitle, year, type);
   const [plotUz, watchLinks] = await Promise.all([
     englishPlot ? translateToUzbek(englishPlot) : Promise.resolve('Tavsif mavjud emas'),
-    findWatchLinks(displayTitle, originalTitle, year, uzTitle),
+    findWatchLinks(displayTitle, originalTitle, year, uzTitle, imdbId),
   ]);
 
   return {

@@ -4,6 +4,7 @@ import {
   getMovieDetails,
   imdbIdFromMovieUrl,
   cacheEntryMatchesIdentified,
+  cachedWatchLinksNonEmpty,
 } from '../services/movieService';
 import {
   getCached,
@@ -84,7 +85,7 @@ export async function handleText(ctx: Context): Promise<void> {
     const cached = await getCached(identified.title);
     let details;
 
-    if (cached && cacheEntryMatchesIdentified(identified, cached)) {
+    if (cached && cacheEntryMatchesIdentified(identified, cached) && cachedWatchLinksNonEmpty(cached.watch_links)) {
       details = {
         title: cached.title,
         uzTitle: cached.uz_title || cached.title,

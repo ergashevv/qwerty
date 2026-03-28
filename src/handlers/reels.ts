@@ -4,6 +4,7 @@ import {
   MovieDetails,
   imdbIdFromMovieUrl,
   cacheEntryMatchesIdentified,
+  cachedWatchLinksNonEmpty,
 } from '../services/movieService';
 import {
   getCached,
@@ -80,7 +81,7 @@ export async function handleInstagramReelUrl(ctx: Context, reelUrl: string): Pro
     const cached = await getCached(identified.title);
     let details: MovieDetails;
 
-    if (cached && cacheEntryMatchesIdentified(fakeIdentified, cached)) {
+    if (cached && cacheEntryMatchesIdentified(fakeIdentified, cached) && cachedWatchLinksNonEmpty(cached.watch_links)) {
       await ctx.api.editMessageText(
         chatId,
         msgId,

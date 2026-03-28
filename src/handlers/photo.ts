@@ -7,6 +7,7 @@ import {
   MovieDetails,
   imdbIdFromMovieUrl,
   cacheEntryMatchesIdentified,
+  cachedWatchLinksNonEmpty,
 } from '../services/movieService';
 import {
   getCached,
@@ -109,7 +110,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
     const cached = await getCached(identified.title);
     let details: MovieDetails;
 
-    if (cached && cacheEntryMatchesIdentified(identified, cached)) {
+    if (cached && cacheEntryMatchesIdentified(identified, cached) && cachedWatchLinksNonEmpty(cached.watch_links)) {
       await ctx.api.editMessageText(
         chatId,
         msgId,
@@ -192,7 +193,7 @@ export function buildWatchKeyboard(details: MovieDetails): InlineKeyboardButton[
     rows.push([{ text: '🌐 IMDb', url: details.imdbUrl }]);
   }
 
-  if (rows.length === 0) {
+  if (details.watchLinks.length === 0) {
     const q =
       (details.originalTitle && details.originalTitle.trim()) ||
       details.title ||
