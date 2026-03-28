@@ -165,6 +165,13 @@ export function cachedWatchLinksNonEmpty(watchLinksJson: string | null | undefin
   }
 }
 
+
+/** uz_title Kirill harflarini o'z ichiga olsa — kesh eskirgan, qayta fetch kerak. */
+export function cachedUzTitleIsValid(uzTitle: string | null | undefined): boolean {
+  if (!uzTitle) return true;
+  return !/[Ѐ-ӿ]/.test(uzTitle);
+}
+
 export function isNoisyTitle(title: string): boolean {
   return /\b(music video|official video|lyrics|ft\.|feat\.|vevo|trailer)\b/i.test(title);
 }
@@ -605,9 +612,14 @@ async function geminiPickFromCandidates(base64: string, actors: string, candidat
           text: `Recognized actors: ${actors}
 Candidate movies/shows (pick exactly ONE from this list): ${candidates}
 
-Look at the screenshot carefully. Based on the scene details (costumes, setting, lighting, props, visible text in the film frame), which ONE of the candidates does this screenshot belong to? Also identify which part/sequel if applicable.
+Look at the screenshot carefully. Based on the scene details (costumes, setting, lighting, props, visible text in the film frame), which ONE of the candidates does this screenshot belong to?
 
-If none of the candidates fit the scene, respond with: {"title": "", "type": "movie", "confidence": "low"}
+IMPORTANT RULES:
+1. You MUST pick from the candidates list ONLY — do NOT suggest any title outside this list.
+2. These actors were identified with high confidence by face recognition — the film is almost certainly in this list.
+3. If you are uncertain between two, pick the one whose visual context (style, setting, tone) best matches.
+4. Use "medium" confidence if you are not fully sure — but still pick the best match from the list.
+5. Only use confidence "low" with empty title if the image has NO connection to any candidate (e.g. it is clearly a non-film image like a real-life photo or meme).
 
 Respond ONLY with JSON:
 {"title": "Exact title from candidates", "type": "movie" or "tv", "confidence": "high/medium/low"}`,
@@ -642,35 +654,25 @@ async function identifyByGemini(base64: string): Promise<MovieIdentified | null>
         {
           inlineData: { data: base64, mimeType: 'image/jpeg' },
         },
-        `You are an expert in world cinema including Hollywood, Turkish, Korean, Russian, Uzbek, Kazakh, Kyrgyz, Tajik, Azerbaijani, and other CIS/SNG country films.
+        `You are a world cinema expert. Identify the EXACT movie or TV show in this screenshot.
 
-Identify the EXACT movie or TV show in this screenshot.
+The film can be from ANY country: Hollywood, Turkey, Korea, Russia, Kazakhstan, Uzbekistan, Kyrgyzstan, Azerbaijan, India, Iran, or anywhere else. Do NOT bias toward any region.
 
 Key clues to analyze:
 1. Actors' faces — recognize them if possible
-2. Costumes and clothing style (prison uniform? Ottoman period? Steppe/nomad? Modern?)
-3. Setting and location (prison cell? Kazakh steppe? Central Asian village? Istanbul bazaar?)
-4. Any visible text (subtitles, watermarks, logos in any language including Cyrillic, Latin, Arabic) — ignore social media app UI
-5. Language of subtitles or on-screen text if visible
-6. Scene emotion and context
-7. Film production style (Hollywood budget? Low-budget CIS production? Turkish TV quality?)
-
-CIS/SNG film hints:
-- Kazakh cinema: "Nomad", "Tulpan", "The Gift to Stalin", "Myn Bala", "Kazakh Khanate" series, Kazakhfilm productions
-- Kyrgyz cinema: "The Adopted Son", works by Aktan Arym Kubat
-- Uzbek cinema: Uzbekfilm productions, "Ali Baba va 40 qaroqchilar" and similar
-- Azerbaijani cinema: Azerbaijanfilm productions
-
-Turkish film hints:
-- Prison dramas with innocent/simple man: consider "7. Koğuştaki Mucize"
-- Historical Ottoman: "Diriliş: Ertuğrul", "Kuruluş: Osman", "Payitaht Abdülhamid"
-- Crime/thriller: "Çukur", "Ezel", "Kara Para Aşk", "Sen Anlat Karadeniz"
-- Modern drama: "Fatih Harbiye", "Kuzey Güney"
+2. Costumes and clothing style (fantasy? period? modern? nomad? prison?)
+3. Setting and location (fantasy world? steppe? city? historical?)
+4. Any visible text (subtitles, watermarks, on-screen logos in any language) — ignore social media UI overlay
+5. Language of subtitles if visible
+6. Overall visual style and production quality
 
 Respond ONLY with JSON:
-{"title": "Exact title or unknown", "type": "movie" or "tv", "confidence": "high/medium/low", "reasoning": "brief explanation"}
+{"title": "Exact title or unknown", "type": "movie" or "tv", "confidence": "high/medium/low"}
 
-If you are not sure which ONE film this is, use "unknown" for title and "low" for confidence.`,
+Rules:
+- Use confidence "high" or "medium" only if you genuinely recognize this specific film.
+- Use "unknown" + "low" if you cannot identify the specific title (not just the genre/region).
+- Do NOT guess a title just because it fits the genre — only respond with a title you actually recognize.`,
       ])
     );
     const text = result.response.text();
@@ -803,7 +805,7 @@ export async function identifyMovie(base64: string, mimeType: string): Promise<M
   const cropMime = 'image/jpeg';
 
   const [faces, vision, gemini] = await Promise.all([
-    withTimeout(identifyByFaces(croppedBase64)),
+    withTimeout(identifyByFaces(croppedBase64), 25000),   // TMDB fetch + Gemini pick ko'p vaqt oladi
     withTimeout(identifyByVision(croppedBase64)),
     withTimeout(identifyByGemini(croppedBase64)),
   ]);
@@ -886,10 +888,15 @@ export async function identifyMovie(base64: string, mimeType: string): Promise<M
     }
   }
 
-  // Hech bir nomzod tasdiqlanmadi, lekin Gemini alternativ bilsa — uni qaytaramiz
+  // Hech bir nomzod tasdiqlanmadi, lekin Gemini alternativ taklif bilsa —
+  // uni ham verify dan o'tkazamiz (tasdiqsiz qaytarmaslik uchun)
   if (lastAlternative) {
-    console.log('✅ Alternativ sarlavha bilan qaytarildi:', lastAlternative.title);
-    return lastAlternative;
+    const altVerify = await withTimeout(geminiVerify(croppedBase64, lastAlternative.title, cropMime));
+    if (altVerify?.match) {
+      console.log('✅ Alternativ sarlavha tasdiqlandi:', lastAlternative.title);
+      return lastAlternative;
+    }
+    console.log('⚠️ Alternativ sarlavha ham tasdiqlanmadi:', lastAlternative.title);
   }
 
   console.log('⚠️ Hech bir nomzod Gemini tasdiqidan o\'tmadi');
@@ -984,10 +991,10 @@ export async function identifyFromTextDetailed(query: string): Promise<IdentifyF
     if (tmdb?.result) {
       const tmdbTitle = tmdb.result.title || tmdb.result.name || '';
       const tmdbOrigTitle = tmdb.result.original_title || tmdb.result.original_name || '';
-      const voteCount = tmdb.result.vote_count ?? 0;
-      // SNG/CIS filmlar uchun: original_title (kirill/turk) bilan ham solishtirish + threshold 50 ga tushirildi
+      // SNG/CIS filmlar uchun: original_title (kirill/turk) bilan ham solishtirish
+      // voteCount >= N yolg'iz shart qo'shilmasin — title match bo'lmasa noto'g'ri film qaytadi
       const queryMatches = titlesMatchNative(query, tmdbTitle, tmdbOrigTitle);
-      if (queryMatches || voteCount >= 50) {
+      if (queryMatches) {
         // Agar inglizcha sarlavha bo'sh bo'lsa, original sarlavhani ishlatamiz
         return found({ title: tmdbTitle || tmdbOrigTitle, type: tmdb.type });
       }
@@ -1203,11 +1210,15 @@ Release year: ${y || 'unknown'}
 Rules — CRITICAL:
 1. Do NOT produce a literal word-for-word translation of the English (or original) title. Uzbek releases often use a completely different market title (short phrase, different wording, or kept English).
 2. Output the title that is actually used on Uzbek posters, TV, or sites like uzmovi / kinoxit when you know it. If several names exist, pick the most common search term users type.
-3. If there is no well-known Uzbek market title, output the English title "${disp}" unchanged (Latin script), not a guessed translation.
-4. Output ONLY the Uzbek market title or English title — one line, no quotes, no explanation.`
+3. If there is no well-known Uzbek market title, output the English title "${disp}" unchanged, not a guessed translation.
+4. Output ONLY the Uzbek market title or English title — one line, no quotes, no explanation.
+5. IMPORTANT: Output MUST be in Uzbek Latin script. Do NOT use Cyrillic characters. If you know the title only in Cyrillic, transliterate it to Uzbek Latin (e.g. "Sargardon Zamin" not "Блуждающая Земля").`
       )
     );
-    const result = r.response.text()?.trim().replace(/^["']|["']$/g, '') || displayTitle;
+    const raw = r.response.text()?.trim().replace(/^["']|["']$/g, '') || displayTitle;
+    // Kirill harflari kelsa — noto'g'ri, displayTitle qaytaramiz
+    const hasCyrillic = /[\u0400-\u04ff]/.test(raw);
+    const result = hasCyrillic ? displayTitle : raw;
     const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
     return norm(result) === norm(disp) ? disp : result;
   } catch {

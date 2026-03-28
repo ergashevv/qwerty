@@ -3,12 +3,15 @@ import type { InlineKeyboardButton } from 'grammy/types';
 import axios from 'axios';
 import {
   identifyMovie,
+  identifyFromTextDetailed,
   getMovieDetails,
   MovieDetails,
   imdbIdFromMovieUrl,
   cacheEntryMatchesIdentified,
   cachedWatchLinksNonEmpty,
+  cachedUzTitleIsValid,
 } from '../services/movieService';
+import { getRecentUserText, clearUserTextContext } from '../services/userContext';
 import {
   getCached,
   setCache,
@@ -92,7 +95,12 @@ export async function handlePhoto(ctx: Context): Promise<void> {
     const msgId = processing.message_id;
     await ctx.api.editMessageText(chatId, msgId, STATUS_IDENTIFY_LINES[0]);
 
-    const identified = await withRotatingStatus(
+    // Foto caption yoki oldingi matn xabardan hint olish
+    const captionHint = ctx.message?.caption?.trim() || null;
+    const recentTextHint = getRecentUserText(userId);
+    const textHint = captionHint || recentTextHint || null;
+
+    let identified = await withRotatingStatus(
       ctx,
       chatId,
       msgId,
@@ -101,13 +109,31 @@ export async function handlePhoto(ctx: Context): Promise<void> {
       { intervalMs: 3000 }
     );
 
+    // Rasm orqali topilmadi — matn hint bilan fallback
+    if (!identified && textHint) {
+      console.log(`📝 Foto topilmadi, matn hint: "${textHint}"`);
+      await ctx.api.editMessageText(chatId, msgId, `🔍 "${textHint.slice(0, 50)}" bo'yicha qidirilmoqda...`);
+      const textResult = await identifyFromTextDetailed(textHint);
+      if (textResult.outcome === 'found') {
+        identified = textResult.identified;
+        console.log(`✅ Matn hint orqali topildi: "${identified.title}"`);
+      }
+    }
+
+    // Kontekstni tozalash
+    clearUserTextContext(userId);
+
     if (!identified) {
+      const hintMsg = textHint
+        ? `\n\n💡 <i>"${textHint.slice(0, 40)}" so'rovi bilan ham sinab ko'rildim — topilmadi.</i>`
+        : '';
       await ctx.api.editMessageText(
         ctx.chat!.id,
         processing.message_id,
-        '❌ Bu rasmdan filmni aniqlay olmadim.\n\n' +
-          '📸 Yaxshiroq kadr yuboring: aktyor yuzi, va sahna aniq, imkonqadar sifatliroq rasm bo‘lsin.\n' +
-          '✍️ Yoki filmni qisqacha tasvirlab yozing (nima bo‘lyapti, qanday hodisani ko‘ryapsiz, qanday sahnalar) — matn orqali qidiraman.'
+        '🤔 Bu screenshotdan filmni aniqlay olmadim.' + hintMsg + '\n\n' +
+          '📸 Aniqroq kadr yoki boshqa sahna yuborib koʼring\n' +
+          '✍️ Yoki filmni soʼzlar bilan tasvirlab yozing',
+        { parse_mode: 'HTML' }
       );
       return;
     }
@@ -116,7 +142,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
     const cached = await getCached(identified.title);
     let details: MovieDetails;
 
-    if (cached && cacheEntryMatchesIdentified(identified, cached) && cachedWatchLinksNonEmpty(cached.watch_links)) {
+    if (cached && cacheEntryMatchesIdentified(identified, cached) && cachedWatchLinksNonEmpty(cached.watch_links) && cachedUzTitleIsValid(cached.uz_title)) {
       await ctx.api.editMessageText(
         chatId,
         msgId,
@@ -199,18 +225,16 @@ export function buildWatchKeyboard(details: MovieDetails): InlineKeyboardButton[
     rows.push([{ text: '🌐 IMDb', url: details.imdbUrl }]);
   }
 
-  if (details.watchLinks.length === 0) {
-    const q =
-      (details.originalTitle && details.originalTitle.trim()) ||
-      details.title ||
-      details.uzTitle;
-    rows.push([
-      {
-        text: '🔍 Google da qidirish',
-        url: `https://www.google.com/search?q=${encodeURIComponent(`${q} o'zbek tilida`)}`,
-      },
-    ]);
-  }
+  const q =
+    (details.originalTitle && details.originalTitle.trim()) ||
+    details.title ||
+    details.uzTitle;
+  rows.push([
+    {
+      text: "🔍 Google'da qidirish",
+      url: `https://www.google.com/search?q=${encodeURIComponent(q + ' uzbek tilida')}`,
+    },
+  ]);
 
   return rows;
 }

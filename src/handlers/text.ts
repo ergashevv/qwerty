@@ -5,6 +5,7 @@ import {
   imdbIdFromMovieUrl,
   cacheEntryMatchesIdentified,
   cachedWatchLinksNonEmpty,
+  cachedUzTitleIsValid,
 } from '../services/movieService';
 import {
   getCached,
@@ -22,6 +23,7 @@ import { USER_REQUEST_LIMIT, isUnlimitedUser } from '../config/limits';
 import { extractInstagramReelUrl } from '../services/reelsUrl';
 import { handleInstagramReelUrl } from './reels';
 import { STATUS_DETAILS_LINES, withRotatingStatus } from './rotatingStatus';
+import { setUserTextContext } from '../services/userContext';
 
 export async function handleText(ctx: Context): Promise<void> {
   const text = ctx.message?.text?.trim();
@@ -38,6 +40,9 @@ export async function handleText(ctx: Context): Promise<void> {
     await handleInstagramReelUrl(ctx, reelUrl);
     return;
   }
+
+  // Keyingi foto yuborilsa context sifatida ishlatish uchun saqlanadi
+  setUserTextContext(userId, text);
 
   if (!isUnlimitedUser(userId)) {
     if ((await getWindowRequestCount(userId)) >= USER_REQUEST_LIMIT) {
@@ -94,7 +99,7 @@ export async function handleText(ctx: Context): Promise<void> {
     const cached = await getCached(identified.title);
     let details;
 
-    if (cached && cacheEntryMatchesIdentified(identified, cached) && cachedWatchLinksNonEmpty(cached.watch_links)) {
+    if (cached && cacheEntryMatchesIdentified(identified, cached) && cachedWatchLinksNonEmpty(cached.watch_links) && cachedUzTitleIsValid(cached.uz_title)) {
       details = {
         title: cached.title,
         uzTitle: cached.uz_title || cached.title,
