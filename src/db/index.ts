@@ -372,3 +372,19 @@ export async function getIdentificationFeedbackStats(): Promise<{ yes: number; n
     no: Number(r.rows[0]?.no ?? 0),
   };
 }
+
+/** Instagram screenshotlari eng ko'p kelgan accountlar ro'yxati */
+export async function getInstagramSourceStats(limit = 15): Promise<{ account: string; count: number }[]> {
+  const pool = getPostgresPool();
+  const r = await pool.query(
+    `SELECT metadata->>'account' AS account, COUNT(*)::int AS count
+     FROM analytics_events
+     WHERE event_type = 'instagram_source'
+       AND metadata->>'account' IS NOT NULL
+     GROUP BY metadata->>'account'
+     ORDER BY count DESC
+     LIMIT $1`,
+    [limit]
+  );
+  return r.rows as { account: string; count: number }[];
+}

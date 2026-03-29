@@ -1625,3 +1625,39 @@ export async function getMovieDetails(identified: MovieIdentified): Promise<Movi
     mediaType: type,
   };
 }
+
+/**
+ * Instagram screenshotidan account nomini ajratib oladi.
+ * Original (crop qilinmagan) rasm bilan chaqirilishi kerak — account nomi
+ * UI ning yuqori yoki pastida bo'ladi va crop qilganda yo'qolishi mumkin.
+ * Faqat muvaffaqiyatli identifikatsiyadan keyin chaqiriladi — token isrofi yo'q.
+ */
+export async function extractInstagramSource(base64: string): Promise<string | null> {
+  if (!GEMINI_KEY) return null;
+  try {
+    const genAI = new GoogleGenerativeAI(GEMINI_KEY);
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+    const result = await withGemini(() =>
+      model.generateContent([
+        { inlineData: { data: base64, mimeType: 'image/jpeg' } },
+        `This is a screenshot from Instagram (Reels or post). Look for an Instagram username or account name visible anywhere in the UI — profile name shown near avatar, @handle overlay, account name at top or bottom of screen.
+
+Respond ONLY with JSON: {"account": "username_here"} or {"account": null} if no Instagram account is visible.
+Rules:
+- Do NOT include @ symbol
+- Lowercase only
+- Only extract if you are confident this is an Instagram account name (not a movie watermark or subtitle)
+- Return null if this doesn't look like an Instagram screenshot`,
+      ])
+    );
+    const text = result.response.text();
+    const m = text.match(/\{[\s\S]*?\}/);
+    if (!m) return null;
+    const parsed = JSON.parse(m[0]) as { account?: string | null };
+    const acc = (parsed.account || '').trim().toLowerCase();
+    if (!acc || acc === 'null' || acc.length < 2 || acc.length > 50) return null;
+    return acc;
+  } catch {
+    return null;
+  }
+}

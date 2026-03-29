@@ -11,7 +11,9 @@ import {
   cachedWatchLinksNonEmpty,
   cachedUzTitleIsValid,
   makeEmptyLinksSentinel,
+  extractInstagramSource,
 } from '../services/movieService';
+import { insertAnalyticsEvent } from '../db/postgres';
 import { getRecentUserText, clearUserTextContext } from '../services/userContext';
 import {
   getCached,
@@ -123,6 +125,19 @@ export async function handlePhoto(ctx: Context): Promise<void> {
 
     // Kontekstni tozalash
     clearUserTextContext(userId);
+
+    // Instagram source — topildi/topilmadidan qat'iy nazar, fon rejimida
+    void extractInstagramSource(base64).then(account => {
+      if (account) {
+        console.log(`📸 Instagram source: @${account}`);
+        insertAnalyticsEvent('instagram_source', {
+          account,
+          telegram_user_id: userId,
+          identified: !!identified,
+          movie_title: identified?.title ?? null,
+        }).catch(() => {});
+      }
+    }).catch(() => {});
 
     if (!identified) {
       const hintMsg = textHint
