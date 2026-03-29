@@ -65,7 +65,7 @@ export async function handleText(ctx: Context): Promise<void> {
     if ((await getWindowRequestCount(userId)) >= USER_REQUEST_LIMIT) {
       await ctx.reply(
         `⚠️ So'rov limiti tugadi (${USER_REQUEST_LIMIT} ta / 12 soat).\n` +
-          '⏳ 12 soatdan keyin yana 3 ta ochiladi.'
+          `⏳ 12 soatdan keyin yana ${USER_REQUEST_LIMIT} ta ochiladi.`
       );
       return;
     }

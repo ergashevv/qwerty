@@ -1,8 +1,8 @@
 /** Matn so'rovlari: har bir foydalanuvchi uchun oyna (sekund) — 12 soat */
 export const REQUEST_WINDOW_SECONDS = 12 * 60 * 60;
 
-/** Matn: oynadagi maksimal so'rovlar */
-export const USER_REQUEST_LIMIT = 3;
+/** Matn: oynadagi maksimal so'rovlar (default 6 — matn asosiy kanal) */
+export const USER_REQUEST_LIMIT = parseInt(process.env.USER_REQUEST_LIMIT || '6', 10);
 
 /**
  * Rasm: bir film qidirganda 3–4 ta screenshot + zaxira.
@@ -10,11 +10,11 @@ export const USER_REQUEST_LIMIT = 3;
  */
 export const PHOTO_BURST_WINDOW_SECONDS = parseInt(process.env.PHOTO_BURST_WINDOW_SECONDS || '900', 10);
 
-/** Shu oynada maksimal rasm (6 = 3–4 urinish + zaxira) */
-export const PHOTO_BURST_LIMIT = parseInt(process.env.PHOTO_BURST_LIMIT || '6', 10);
+/** Shu oynada maksimal rasm (5 = 3–4 kadr + zaxira) */
+export const PHOTO_BURST_LIMIT = parseInt(process.env.PHOTO_BURST_LIMIT || '5', 10);
 
 /** Kuniga maksimal rasm (spam oldini olish) */
-export const PHOTO_DAILY_LIMIT = parseInt(process.env.PHOTO_DAILY_LIMIT || '80', 10);
+export const PHOTO_DAILY_LIMIT = parseInt(process.env.PHOTO_DAILY_LIMIT || '50', 10);
 
 /** Instagram Reels: har bir foydalanuvchi uchun oyna (sekund) — default 6 soat */
 export const REELS_WINDOW_SECONDS = parseInt(process.env.REELS_WINDOW_SECONDS || String(6 * 60 * 60), 10);
