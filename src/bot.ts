@@ -6,7 +6,6 @@ import { handleText } from './handlers/text';
 import {
   getAudienceStats,
   getIdentificationFeedbackStats,
-  getInstagramSourceStats,
   markUserStarted,
   pruneUserActivityHistory,
   recordUserActivityDay,
@@ -102,20 +101,15 @@ async function bootstrap(): Promise<void> {
     if (adminId && ctx.from?.id.toString() !== adminId) return;
 
     try {
-      const [aud, fb, igStats, blockedRes] = await Promise.all([
+      const [aud, fb, blockedRes] = await Promise.all([
         getAudienceStats(),
         getIdentificationFeedbackStats(),
-        getInstagramSourceStats(10),
         getPostgresPool().query(`SELECT COUNT(*) AS cnt FROM users WHERE blocked_at IS NOT NULL`),
       ]);
       const fbTotal = fb.yes + fb.no;
       const blockedCount = Number(blockedRes.rows[0]?.cnt ?? 0);
       const pct = fbTotal > 0 ? Math.round((fb.yes / fbTotal) * 100) : 0;
       const activeUsers = aud.totalUsers - blockedCount;
-
-      const igLines = igStats.length > 0
-        ? igStats.map((r, i) => `${i + 1}. @${r.account} — ${r.count} ta`).join('\n')
-        : 'Hali ma\'lumot yo\'q';
 
       await ctx.reply(
         `📊 <b>Statistika</b>\n\n` +
@@ -126,9 +120,7 @@ async function bootstrap(): Promise<void> {
           `🗓 Oy: ${aud.mau}\n\n` +
           `<b>Natija</b>\n` +
           `✅ To'g'ri: ${fb.yes}  ❌ Xato: ${fb.no}\n` +
-          `🎯 Aniqlik: ${pct}%  (jami ${fbTotal} javob)\n\n` +
-          `<b>📸 Instagram manbalar (Top 10)</b>\n` +
-          igLines,
+          `🎯 Aniqlik: ${pct}%  (jami ${fbTotal} javob)`,
         { parse_mode: 'HTML' }
       );
     } catch {
