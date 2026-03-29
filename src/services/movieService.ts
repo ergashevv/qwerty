@@ -340,6 +340,7 @@ interface SerperResult { title: string; link: string; snippet?: string; }
 const BRAVE_KEY = process.env.BRAVE_SEARCH_API_KEY || '';
 const CSE_KEY   = process.env.GOOGLE_CSE_KEY || '';
 const CSE_ID    = process.env.GOOGLE_CSE_ID  || '';
+let _cseDisabled = false; // bir marta xato bo'lsa, qayta urinmaymiz
 
 /** Brave Search API — ~1000 bepul/oy (api.search.brave.com) */
 async function braveSearch(query: string): Promise<SerperResult[]> {
@@ -363,7 +364,7 @@ async function braveSearch(query: string): Promise<SerperResult[]> {
 
 /** Google Custom Search — 100 bepul/kun (console.cloud.google.com) */
 async function googleCseSearch(query: string): Promise<SerperResult[]> {
-  if (!CSE_KEY || !CSE_ID) return [];
+  if (!CSE_KEY || !CSE_ID || _cseDisabled) return [];
   try {
     const r = await axios.get('https://www.googleapis.com/customsearch/v1', {
       params: { key: CSE_KEY, cx: CSE_ID, q: query, num: 10 },
@@ -375,7 +376,13 @@ async function googleCseSearch(query: string): Promise<SerperResult[]> {
       snippet: item.snippet || '',
     }));
   } catch (e) {
-    console.warn('Google CSE xato:', (e as Error).message?.slice(0, 80));
+    const status = (e as { response?: { status?: number } }).response?.status;
+    if (status === 403) {
+      _cseDisabled = true;
+      console.warn('⚠️ Google CSE 403 — o\'chirildi (session davomida qayta urinilmaydi)');
+    } else {
+      console.warn('Google CSE xato:', (e as Error).message?.slice(0, 80));
+    }
     return [];
   }
 }
