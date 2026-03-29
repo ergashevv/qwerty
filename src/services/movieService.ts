@@ -1626,11 +1626,13 @@ export async function getMovieDetails(identified: MovieIdentified): Promise<Movi
   };
 }
 
+/** Instagram username validatsiya regex: harf, raqam, nuqta, pastki chiziq, 5-30 belgi */
+const IG_USERNAME_RE = /^[a-z0-9][a-z0-9._]{3,28}[a-z0-9]$/;
+
 /**
- * Instagram screenshotidan account nomini ajratib oladi.
- * Original (crop qilinmagan) rasm bilan chaqirilishi kerak — account nomi
- * UI ning yuqori yoki pastida bo'ladi va crop qilganda yo'qolishi mumkin.
- * Faqat muvaffaqiyatli identifikatsiyadan keyin chaqiriladi — token isrofi yo'q.
+ * Rasmda Instagram UI ko'rinib turganida account nomini ajratib oladi.
+ * Original (crop qilinmagan) rasm bilan chaqirilishi kerak.
+ * Model avval platformani aniqlaydi — Instagram emasligiga ishonch hosil qilsa null qaytaradi.
  */
 export async function extractInstagramSource(base64: string): Promise<string | null> {
   if (!GEMINI_KEY) return null;
@@ -1640,22 +1642,37 @@ export async function extractInstagramSource(base64: string): Promise<string | n
     const result = await withGemini(() =>
       model.generateContent([
         { inlineData: { data: base64, mimeType: 'image/jpeg' } },
-        `This is a screenshot from Instagram (Reels or post). Look for an Instagram username or account name visible anywhere in the UI — profile name shown near avatar, @handle overlay, account name at top or bottom of screen.
+        `Look at this image carefully.
 
-Respond ONLY with JSON: {"account": "username_here"} or {"account": null} if no Instagram account is visible.
+Step 1 — Is this clearly an Instagram screenshot (Reels or post)?
+You must see Instagram-specific UI elements: the Instagram profile avatar circle, username text next to it, follow button, like/comment/share icons in Instagram style, or @handle overlay on a Reel.
+If you are NOT confident this is Instagram (e.g. it's a movie frame, TikTok, Telegram, a photo without any social media UI) → return {"platform": null, "account": null}
+
+Step 2 — If it IS Instagram, find the account username shown in the UI (not a watermark on the video itself, not subtitle text, not a movie title).
+The username appears next to the profile avatar circle, at the top of the post/reel, or as "@username" overlay.
+
+Respond ONLY with JSON:
+{"platform": "instagram", "account": "exact_username_here"}
+or
+{"platform": null, "account": null}
+
 Rules:
-- Do NOT include @ symbol
-- Lowercase only
-- Only extract if you are confident this is an Instagram account name (not a movie watermark or subtitle)
-- Return null if this doesn't look like an Instagram screenshot`,
+- account must be the raw username, no @ symbol, lowercase
+- If you see multiple usernames (e.g. collab post), return the PRIMARY/first account
+- Return null if you cannot clearly read the username or are not sure`,
       ])
     );
     const text = result.response.text();
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return null;
-    const parsed = JSON.parse(m[0]) as { account?: string | null };
-    const acc = (parsed.account || '').trim().toLowerCase();
-    if (!acc || acc === 'null' || acc.length < 2 || acc.length > 50) return null;
+    const parsed = JSON.parse(m[0]) as { platform?: string | null; account?: string | null };
+
+    if (!parsed.platform || parsed.platform !== 'instagram') return null;
+
+    const acc = (parsed.account || '').trim().toLowerCase().replace(/^@/, '');
+    if (!acc || acc === 'null') return null;
+    if (!IG_USERNAME_RE.test(acc)) return null;
+
     return acc;
   } catch {
     return null;

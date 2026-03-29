@@ -52,57 +52,89 @@ describe('extractInstagramSource — to\'g\'ri parse', () => {
   beforeEach(() => getMockGenerateContent().mockReset());
 
   test('oddiy account nomini ajratib oladi', async () => {
-    mockGeminiResponse('{"account": "kinolar_720"}');
-    const result = await extractInstagramSource(DUMMY_BASE64);
-    expect(result).toBe('kinolar_720');
+    mockGeminiResponse('{"platform": "instagram", "account": "kinolar_720"}');
+    expect(await extractInstagramSource(DUMMY_BASE64)).toBe('kinolar_720');
   });
 
   test('katta harflarni kichikka o\'giradi', async () => {
-    mockGeminiResponse('{"account": "KiNoLaR_720"}');
-    const result = await extractInstagramSource(DUMMY_BASE64);
-    expect(result).toBe('kinolar_720');
+    mockGeminiResponse('{"platform": "instagram", "account": "KiNoLaR_720"}');
+    expect(await extractInstagramSource(DUMMY_BASE64)).toBe('kinolar_720');
   });
 
   test('JSON atrofidagi matnni e\'tiborsiz qoldiradi', async () => {
-    mockGeminiResponse('Here is the result: {"account": "films_uz"} based on the image.');
-    const result = await extractInstagramSource(DUMMY_BASE64);
-    expect(result).toBe('films_uz');
+    mockGeminiResponse('Here is the result: {"platform": "instagram", "account": "films_uz"} based on the image.');
+    expect(await extractInstagramSource(DUMMY_BASE64)).toBe('films_uz');
   });
 
   test('bo\'shliqlarni trim qiladi', async () => {
-    mockGeminiResponse('{"account": "  kinolar_720  "}');
-    const result = await extractInstagramSource(DUMMY_BASE64);
-    expect(result).toBe('kinolar_720');
+    mockGeminiResponse('{"platform": "instagram", "account": "  kinolar_720  "}');
+    expect(await extractInstagramSource(DUMMY_BASE64)).toBe('kinolar_720');
+  });
+
+  test('@ belgisi bilan kelsa ham tozalaydi', async () => {
+    mockGeminiResponse('{"platform": "instagram", "account": "@uzmovie_org"}');
+    expect(await extractInstagramSource(DUMMY_BASE64)).toBe('uzmovie_org');
   });
 });
 
-// ─── 2. null holatlari ────────────────────────────────────────────────────────
+// ─── 2. Platform filtri — Instagram emas → null ───────────────────────────────
 
-describe('extractInstagramSource — null qaytaradi', () => {
+describe('extractInstagramSource — Instagram emas holatlari', () => {
   beforeEach(() => getMockGenerateContent().mockReset());
 
-  test('{"account": null} — null qaytaradi', async () => {
-    mockGeminiResponse('{"account": null}');
+  test('platform null — null qaytaradi (kino kadri)', async () => {
+    mockGeminiResponse('{"platform": null, "account": null}');
+    expect(await extractInstagramSource(DUMMY_BASE64)).toBeNull();
+  });
+
+  test('platform tiktok — null qaytaradi', async () => {
+    mockGeminiResponse('{"platform": "tiktok", "account": "kinolar_720"}');
+    expect(await extractInstagramSource(DUMMY_BASE64)).toBeNull();
+  });
+
+  test('platform telegram — null qaytaradi', async () => {
+    mockGeminiResponse('{"platform": "telegram", "account": "kinolar_720"}');
+    expect(await extractInstagramSource(DUMMY_BASE64)).toBeNull();
+  });
+});
+
+// ─── 3. Username regex validatsiyasi ─────────────────────────────────────────
+
+describe('extractInstagramSource — username validatsiyasi', () => {
+  beforeEach(() => getMockGenerateContent().mockReset());
+
+  test('4 ta belgi — juda qisqa (regex: min 5), null qaytaradi', async () => {
+    mockGeminiResponse('{"platform": "instagram", "account": "kino"}');
+    expect(await extractInstagramSource(DUMMY_BASE64)).toBeNull();
+  });
+
+  test('3 ta belgi — juda qisqa, null qaytaradi', async () => {
+    mockGeminiResponse('{"platform": "instagram", "account": "kno"}');
+    expect(await extractInstagramSource(DUMMY_BASE64)).toBeNull();
+  });
+
+  test('31 ta belgi — juda uzun, null qaytaradi', async () => {
+    mockGeminiResponse(`{"platform": "instagram", "account": "${'x'.repeat(31)}"}`);
+    expect(await extractInstagramSource(DUMMY_BASE64)).toBeNull();
+  });
+
+  test('bo\'sh joy bilan — regex o\'tmaydi, null qaytaradi', async () => {
+    mockGeminiResponse('{"platform": "instagram", "account": "kinolar 720"}');
+    expect(await extractInstagramSource(DUMMY_BASE64)).toBeNull();
+  });
+
+  test('maxsus belgilar (!) — regex o\'tmaydi, null qaytaradi', async () => {
+    mockGeminiResponse('{"platform": "instagram", "account": "kino!uz"}');
     expect(await extractInstagramSource(DUMMY_BASE64)).toBeNull();
   });
 
   test('"null" string — null qaytaradi', async () => {
-    mockGeminiResponse('{"account": "null"}');
+    mockGeminiResponse('{"platform": "instagram", "account": "null"}');
     expect(await extractInstagramSource(DUMMY_BASE64)).toBeNull();
   });
 
   test('bo\'sh string — null qaytaradi', async () => {
-    mockGeminiResponse('{"account": ""}');
-    expect(await extractInstagramSource(DUMMY_BASE64)).toBeNull();
-  });
-
-  test('1 ta belgi — juda qisqa, null qaytaradi', async () => {
-    mockGeminiResponse('{"account": "a"}');
-    expect(await extractInstagramSource(DUMMY_BASE64)).toBeNull();
-  });
-
-  test('51 ta belgi — juda uzun, null qaytaradi', async () => {
-    mockGeminiResponse(`{"account": "${'x'.repeat(51)}"}`);
+    mockGeminiResponse('{"platform": "instagram", "account": ""}');
     expect(await extractInstagramSource(DUMMY_BASE64)).toBeNull();
   });
 
