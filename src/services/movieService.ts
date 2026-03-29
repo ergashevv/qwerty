@@ -391,21 +391,27 @@ async function serperSearch(query: string, gl = 'uz', hl = 'uz'): Promise<Serper
         { q: query, gl, hl, num: 10 },
         { headers: { 'X-API-KEY': SERPER_KEY, 'Content-Type': 'application/json' }, timeout: TIMEOUT }
       );
-      return r.data.organic || [];
+      const results = r.data.organic || [];
+      console.log(`🔎 Serper: "${query.slice(0, 40)}" → ${results.length} natija`);
+      return results;
     } catch (e) {
       const status = (e as { response?: { status?: number } }).response?.status;
       if (status === 400 || status === 402 || status === 429) {
         console.warn(`⚠️ Serper ${status} kredit/limit — Brave ga o'tilmoqda`);
+        console.log(`🦁 Brave: "${query.slice(0, 40)}"`);
         const brave = await braveSearch(query);
         if (brave.length > 0) return brave;
+        console.log(`🔍 Google CSE: "${query.slice(0, 40)}"`);
         return googleCseSearch(query);
       }
       return [];
     }
   }
   // Serper key yo'q — Brave, so'ng Google CSE
+  console.log(`🦁 Brave: "${query.slice(0, 40)}"`);
   const brave = await braveSearch(query);
   if (brave.length > 0) return brave;
+  console.log(`🔍 Google CSE: "${query.slice(0, 40)}"`);
   return googleCseSearch(query);
 }
 
