@@ -154,9 +154,34 @@ export function cacheEntryMatchesIdentified(
   return false;
 }
 
-/** movie_cache da watch_links bo‘sh [] bo‘lsa, eski bug’dan qolgan — qayta getMovieDetails chaqiriladi. */
+/**
+ * Havola topilmagan filmlar uchun sentinel: {"empty":true,"at":UNIX_TS}.
+ * 24 soat ichida qayta qidirmaslik — Serper/Brave kreditini tejaydi.
+ */
+const EMPTY_LINKS_COOLDOWN = 24 * 60 * 60;
+
+export function makeEmptyLinksSentinel(): string {
+  return JSON.stringify({ empty: true, at: Math.floor(Date.now() / 1000) });
+}
+
+function isEmptyLinksSentinel(watchLinksJson: string): boolean {
+  try {
+    const p = JSON.parse(watchLinksJson) as { empty?: boolean; at?: number };
+    if (!p.empty) return false;
+    return Math.floor(Date.now() / 1000) - (p.at ?? 0) < EMPTY_LINKS_COOLDOWN;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Bo'sh [] (eski bug) → qayta qidirish (false).
+ * Sentinel 24 soat o'tmagan → qayta qidirmaslik (true).
+ * Havola bor → true.
+ */
 export function cachedWatchLinksNonEmpty(watchLinksJson: string | null | undefined): boolean {
   if (!watchLinksJson) return false;
+  if (isEmptyLinksSentinel(watchLinksJson)) return true;
   try {
     const arr = JSON.parse(watchLinksJson) as unknown;
     return Array.isArray(arr) && arr.length > 0;
@@ -164,7 +189,6 @@ export function cachedWatchLinksNonEmpty(watchLinksJson: string | null | undefin
     return false;
   }
 }
-
 
 /** uz_title Kirill harflarini o'z ichiga olsa — kesh eskirgan, qayta fetch kerak. */
 export function cachedUzTitleIsValid(uzTitle: string | null | undefined): boolean {

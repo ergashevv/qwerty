@@ -6,6 +6,7 @@ import {
   cacheEntryMatchesIdentified,
   cachedWatchLinksNonEmpty,
   cachedUzTitleIsValid,
+  makeEmptyLinksSentinel,
 } from '../services/movieService';
 import {
   getCached,
@@ -121,7 +122,7 @@ export async function handleInstagramReelUrl(ctx: Context, reelUrl: string): Pro
         year: details.year,
         poster_url: details.posterUrl || undefined,
         plot_uz: details.plotUz,
-        watch_links: JSON.stringify(details.watchLinks),
+        watch_links: details.watchLinks.length > 0 ? JSON.stringify(details.watchLinks) : makeEmptyLinksSentinel(),
         rating: details.rating,
         imdb_url: details.imdbUrl || undefined,
       });

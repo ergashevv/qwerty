@@ -224,7 +224,8 @@ export interface MovieCacheEntry {
   imdb_url?: string;
 }
 
-const CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
+// 30 kun: havola manzillari tez-tez o'zgarmaydi, qayta qidiruvni kamaytiradi
+const CACHE_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 export async function getCached(title: string): Promise<MovieCacheEntry | null> {
   const pool = getPostgresPool();
