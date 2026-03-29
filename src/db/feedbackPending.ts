@@ -83,16 +83,26 @@ export async function insertPendingFeedback(row: PendingFeedbackInsert): Promise
 export async function consumePendingFeedback(key: string, telegramUserId: number): Promise<PendingFeedbackRow | null> {
   const pool = getPostgresPool();
   const isLegacyId = /^\d{1,12}$/.test(key) && key.length < 20;
-  const sel = isLegacyId
-    ? await pool.query(`SELECT * FROM pending_identification_feedback WHERE id = $1`, [Number(key)])
-    : await pool.query(`SELECT * FROM pending_identification_feedback WHERE feedback_token = $1`, [key]);
 
-  const raw = sel.rows[0] as
+  /**
+   * DELETE ... RETURNING — atomik operatsiya.
+   * Foydalanuvchi tugmani ikki marta bossa ham, faqat bitta so'rov
+   * qatorni o'chirib oladi; ikkinchisi 0 qator qaytaradi → double-count yo'q.
+   */
+  const res = isLegacyId
+    ? await pool.query(
+        `DELETE FROM pending_identification_feedback WHERE id = $1 AND telegram_user_id = $2 RETURNING *`,
+        [Number(key), telegramUserId]
+      )
+    : await pool.query(
+        `DELETE FROM pending_identification_feedback WHERE feedback_token = $1 AND telegram_user_id = $2 RETURNING *`,
+        [key, telegramUserId]
+      );
+
+  const raw = res.rows[0] as
     | (PendingFeedbackRow & { id: string | number; telegram_user_id: string | number })
     | undefined;
-  if (!raw || Number(raw.telegram_user_id) !== telegramUserId) return null;
-
-  await pool.query(`DELETE FROM pending_identification_feedback WHERE id = $1`, [raw.id]);
+  if (!raw) return null;
 
   return {
     id: Number(raw.id),

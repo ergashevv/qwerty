@@ -1,0 +1,54 @@
+---
+alwaysApply: true
+---
+
+# Kinova Bot — Loyiha konteksti
+
+## Stack
+- **Runtime**: Node.js 20 + TypeScript (`ts-node` dev, `tsc` production)
+- **Bot**: Telegraf (Telegram Bot API)
+- **DB**: PostgreSQL 16 — VPS da lokal (`localhost:5432`, database: `kinovadb`)
+- **AI**: Anthropic Claude + Google Gemini (rasm/matn tahlili)
+- **Deploy**: GitHub Actions → SSH → PM2 (`pm2 restart kinova-bot`)
+
+## VPS
+- **IP**: `57.131.46.71` (OVH Ubuntu 24.04)
+- **Papka**: `~/qwerty`
+- **DB user**: `kinovabot`, **DB**: `kinovadb`
+- PostgreSQL tashqaridan yopiq — faqat `localhost`
+
+## Muhim fayllar
+- `src/bot.ts` — entry point, bootstrap
+- `src/db/postgres.ts` — DB pool, schema, analytics
+- `src/handlers/` — text, photo, reels handlerlari
+- `src/services/movieService.ts` — kino qidirish logikasi
+- `SERVER_SETUP.md` — server konfiguratsiya hujjati
+- `scripts/setup-server.sh` — yangi server setup
+- `scripts/backup-db.sh` — DB backup (cron: har kuni 03:00)
+- `.github/workflows/deploy.yml` — CI/CD
+
+## .env (VPS da qo'lda, git da yo'q)
+Asosiy o'zgaruvchilar:
+- `BOT_TOKEN` — Telegram bot token
+- `DATABASE_URL` — `postgresql://kinovabot:...@localhost:5432/kinovadb`
+- `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`
+- `TMDB_API_KEY`, `OMDB_API_KEY`, `SERPER_API_KEY`
+
+## Developer (Nathan) ulanish
+SSH tunnel orqali:
+```bash
+ssh -L 5433:localhost:5432 ubuntu@57.131.46.71 -N
+# .env: DATABASE_URL=postgresql://kinovabot:...@localhost:5433/kinovadb
+```
+
+## DB Schema
+`initPostgresSchema()` startup da avtomatik yaratadi:
+- `users` — foydalanuvchilar
+- `movie_cache` — kino cache
+- `analytics_events` — statistika (JSONB)
+- `photo_requests`, `reels_requests`, `search_requests` — limitlash
+- `pending_identification_feedback` — feedback queue
+- `user_activity_day` — kunlik faollik
+
+## Tarix
+- Avval: SQLite → keyin Neon Postgres → hozir VPS lokal Postgres (2026-03-29)

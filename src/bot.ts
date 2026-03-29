@@ -109,19 +109,27 @@ async function bootstrap(): Promise<void> {
       );
       const blockedCount = Number(blockedRes.rows[0]?.cnt ?? 0);
 
+      const pct = fbTotal > 0 ? Math.round((fb.yes / fbTotal) * 100) : 0;
+
+      const nowUtc = new Date();
+      const utcDateStr = nowUtc.toISOString().slice(0, 10);           // "2026-03-29"
+      const utcTimeStr = nowUtc.toISOString().slice(11, 16) + ' UTC'; // "10:23 UTC"
+
       await ctx.reply(
-        `📊 <b>Statistika</b>\n\n` +
+        `📊 <b>Statistika</b>\n` +
+          `<i>🕐 ${utcTimeStr} | Sana: ${utcDateStr}</i>\n` +
+          `<i>(Bugun 00:00 UTC da yangilanadi — mahalliy 05:00)</i>\n\n` +
           `<b>Foydalanuvchilar</b>\n` +
           `👥 Jami akkauntlar: ${aud.totalUsers}\n` +
           `🚫 Bot bloklagan: ${blockedCount}\n\n` +
-          `<b>Faollik (UTC)</b>\n` +
-          `Bugun: ${aud.dau}\n` +
+          `<b>Faollik (UTC kuni bo'yicha)</b>\n` +
+          `Bugun [${utcDateStr}]: ${aud.dau}\n` +
           `Joriy hafta: ${aud.wau}\n` +
           `Joriy oy: ${aud.mau}\n\n` +
-          `<b>Result</b>\n` +
-          `✅ To'g'ri topildi (Ha): ${fb.yes}\n` +
-          `❌ Boshqa (Yo'q): ${fb.no}\n` +
-          `📌 Jami javob: ${fbTotal}`,
+          `<b>Feedback natijasi</b>\n` +
+          `✅ Ha (to'g'ri): ${fb.yes}\n` +
+          `❌ Yo'q (noto'g'ri): ${fb.no}\n` +
+          `📌 Jami: ${fbTotal}  |  🎯 Aniqlik: ${pct}%`,
         { parse_mode: 'HTML' }
       );
     } catch {

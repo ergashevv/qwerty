@@ -361,8 +361,8 @@ export async function getIdentificationFeedbackStats(): Promise<{ yes: number; n
   const pool = getPostgresPool();
   const r = await pool.query(`
     SELECT
-      COUNT(*) FILTER (WHERE (metadata->>'correct')::boolean = true)::int AS yes,
-      COUNT(*) FILTER (WHERE (metadata->>'correct')::boolean = false)::int AS no
+      COUNT(*) FILTER (WHERE metadata->>'correct' = 'true')::int  AS yes,
+      COUNT(*) FILTER (WHERE metadata->>'correct' = 'false')::int AS no
     FROM analytics_events
     WHERE event_type = 'identification_feedback'
   `);
