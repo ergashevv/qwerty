@@ -346,7 +346,7 @@ async function braveSearch(query: string): Promise<SerperResult[]> {
   if (!BRAVE_KEY) return [];
   try {
     const r = await axios.get('https://api.search.brave.com/res/v1/web/search', {
-      params: { q: query, count: 10, search_lang: 'uz' },
+      params: { q: query, count: 10 },
       headers: { 'X-Subscription-Token': BRAVE_KEY, 'Accept': 'application/json' },
       timeout: TIMEOUT,
     });
