@@ -309,19 +309,80 @@ async function omdbById(imdbId: string): Promise<{ title: string; type: MediaTyp
   return null;
 }
 
-// ─── SERPER ──────────────────────────────────────────────────────────────────
+// ─── SERPER / BRAVE / GOOGLE CSE ─────────────────────────────────────────────
 
 interface SerperResult { title: string; link: string; snippet?: string; }
 
-async function serperSearch(query: string, gl = 'uz', hl = 'uz'): Promise<SerperResult[]> {
-  if (!SERPER_KEY) return [];
+const BRAVE_KEY = process.env.BRAVE_SEARCH_API_KEY || '';
+const CSE_KEY   = process.env.GOOGLE_CSE_KEY || '';
+const CSE_ID    = process.env.GOOGLE_CSE_ID  || '';
+
+/** Brave Search API — ~1000 bepul/oy (api.search.brave.com) */
+async function braveSearch(query: string): Promise<SerperResult[]> {
+  if (!BRAVE_KEY) return [];
   try {
-    const r = await axios.post('https://google.serper.dev/search',
-      { q: query, gl, hl, num: 10 },
-      { headers: { 'X-API-KEY': SERPER_KEY, 'Content-Type': 'application/json' }, timeout: TIMEOUT }
-    );
-    return r.data.organic || [];
-  } catch { return []; }
+    const r = await axios.get('https://api.search.brave.com/res/v1/web/search', {
+      params: { q: query, count: 10, search_lang: 'uz' },
+      headers: { 'X-Subscription-Token': BRAVE_KEY, 'Accept': 'application/json' },
+      timeout: TIMEOUT,
+    });
+    return (r.data.web?.results || []).map((item: { title: string; url: string; description?: string }) => ({
+      title: item.title || '',
+      link: item.url || '',
+      snippet: item.description || '',
+    }));
+  } catch (e) {
+    console.warn('Brave Search xato:', (e as Error).message?.slice(0, 80));
+    return [];
+  }
+}
+
+/** Google Custom Search — 100 bepul/kun (console.cloud.google.com) */
+async function googleCseSearch(query: string): Promise<SerperResult[]> {
+  if (!CSE_KEY || !CSE_ID) return [];
+  try {
+    const r = await axios.get('https://www.googleapis.com/customsearch/v1', {
+      params: { key: CSE_KEY, cx: CSE_ID, q: query, num: 10 },
+      timeout: TIMEOUT,
+    });
+    return (r.data.items || []).map((item: { title: string; link: string; snippet?: string }) => ({
+      title: item.title || '',
+      link: item.link || '',
+      snippet: item.snippet || '',
+    }));
+  } catch (e) {
+    console.warn('Google CSE xato:', (e as Error).message?.slice(0, 80));
+    return [];
+  }
+}
+
+/**
+ * Qidiruv: Serper (asosiy) → Brave (fallback 1) → Google CSE (fallback 2).
+ * Serper kredit tugasa yoki key yo'q bo'lsa avtomatik keyingiga o'tadi.
+ */
+async function serperSearch(query: string, gl = 'uz', hl = 'uz'): Promise<SerperResult[]> {
+  if (SERPER_KEY) {
+    try {
+      const r = await axios.post('https://google.serper.dev/search',
+        { q: query, gl, hl, num: 10 },
+        { headers: { 'X-API-KEY': SERPER_KEY, 'Content-Type': 'application/json' }, timeout: TIMEOUT }
+      );
+      return r.data.organic || [];
+    } catch (e) {
+      const status = (e as { response?: { status?: number } }).response?.status;
+      if (status === 400 || status === 402 || status === 429) {
+        console.warn(`⚠️ Serper ${status} kredit/limit — Brave ga o'tilmoqda`);
+        const brave = await braveSearch(query);
+        if (brave.length > 0) return brave;
+        return googleCseSearch(query);
+      }
+      return [];
+    }
+  }
+  // Serper key yo'q — Brave, so'ng Google CSE
+  const brave = await braveSearch(query);
+  if (brave.length > 0) return brave;
+  return googleCseSearch(query);
 }
 
 
@@ -644,11 +705,14 @@ Respond ONLY with JSON:
 
 // ─── GEMINI CROSS-CHECK ───────────────────────────────────────────────────────
 
-async function identifyByGemini(base64: string): Promise<MovieIdentified | null> {
+async function identifyByGemini(base64: string, textHint?: string | null): Promise<MovieIdentified | null> {
   if (!GEMINI_KEY) return null;
   try {
     const genAI = new GoogleGenerativeAI(GEMINI_KEY);
     const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+    const hintLine = textHint
+      ? `\nUser hint (may be a movie name, actor, or description in Uzbek/Russian/English): "${textHint.slice(0, 200)}" — use this as an additional clue, but only if it actually matches the screenshot.`
+      : '';
     const result = await withGemini(() =>
       model.generateContent([
         {
@@ -656,7 +720,7 @@ async function identifyByGemini(base64: string): Promise<MovieIdentified | null>
         },
         `You are a world cinema expert. Identify the EXACT movie or TV show in this screenshot.
 
-The film can be from ANY country: Hollywood, Turkey, Korea, Russia, Kazakhstan, Uzbekistan, Kyrgyzstan, Azerbaijan, India, Iran, or anywhere else. Do NOT bias toward any region.
+The film can be from ANY country: Hollywood, Turkey, Korea, Russia, Kazakhstan, Uzbekistan, Kyrgyzstan, Azerbaijan, India, Iran, or anywhere else. Do NOT bias toward any region.${hintLine}
 
 Key clues to analyze:
 1. Actors' faces — recognize them if possible
@@ -792,7 +856,7 @@ function pushDistinct(candidates: MovieIdentified[], m: MovieIdentified | null |
  * Rasm bo'yicha film: faqat Gemini (multimodal) + Vision / Rekognition / tasdiq.
  * GEMINI_API_KEY majburiy.
  */
-export async function identifyMovie(base64: string, mimeType: string): Promise<MovieIdentified | null> {
+export async function identifyMovie(base64: string, mimeType: string, textHint?: string | null): Promise<MovieIdentified | null> {
   const withTimeout = <T>(p: Promise<T>, ms = 10000): Promise<T | null> =>
     Promise.race([p, new Promise<null>(res => setTimeout(() => res(null), ms))]).catch(() => null);
 
@@ -805,9 +869,9 @@ export async function identifyMovie(base64: string, mimeType: string): Promise<M
   const cropMime = 'image/jpeg';
 
   const [faces, vision, gemini] = await Promise.all([
-    withTimeout(identifyByFaces(croppedBase64), 25000),   // TMDB fetch + Gemini pick ko'p vaqt oladi
+    withTimeout(identifyByFaces(croppedBase64), 25000),
     withTimeout(identifyByVision(croppedBase64)),
-    withTimeout(identifyByGemini(croppedBase64)),
+    withTimeout(identifyByGemini(croppedBase64, textHint)),
   ]);
 
   console.log(`Pass1 — Faces: ${faces?.title || '-'}, Vision: ${vision?.title || '-'}, Gemini: ${gemini?.title || '-'}`);
@@ -1227,10 +1291,18 @@ Rules — CRITICAL:
 }
 
 const ALLOWED_HOSTS = [
+  // O'zbek streaming saytlari
+  'kinoxit.net','uzmovi.tv','uzmovi.com','uzmovi.uz',
+  'uzfilms.uz','kinolar.uz','movieuz.net','kino.uz',
+  'cinemakachucha.com','kinogo.uz','kinouzbek.com',
+  // Rossiya/CIS streaming
   'ok.ru','vk.com','vkvideo.ru','rutube.ru','dailymotion.com',
-  'uzmovi.tv','uzmovi.com','uzmovi.uz','kinopoisk.ru','hd.kinopoisk.ru',
-  'ivi.ru','start.ru','yandex.ru','netflix.com','primevideo.com',
-  'hbomax.com','max.com','disneyplus.com',
+  'kinopoisk.ru','hd.kinopoisk.ru','ivi.ru','start.ru',
+  'kinogo.biz','kinogo.fm','filmix.ac','lordfilm.rs','lordfilm.mx',
+  'rezka.ag','hdrezka.me','hdrezka.ag',
+  'yandex.ru',
+  // Global platformalar
+  'netflix.com','primevideo.com','hbomax.com','max.com','disneyplus.com',
 ];
 const BLOCKED_HOSTS = [
   'youtube.com','youtu.be','tiktok.com','instagram.com','facebook.com',
@@ -1368,6 +1440,15 @@ function relaxedFillFromResults(
   }
 }
 
+/**
+ * Tomosha havolalari: LAZY strategiya — oldingi call yetarli bo'lsa keyingisi chaqirilmaydi.
+ * 9 parallel call o'rniga max 3 call → API kredit sarfi ~3x kamayadi.
+ *
+ * Step 1: O'zbek qidiruv (asosiy)      — 1 call
+ * Step 2: Rus qidiruv (yetmasa)         — 1 call
+ * Step 3: IMDb ID bilan aniq (yetmasa)  — 1 call
+ * Jami: max 3 call, odatda 1-2 kifoya.
+ */
 async function findWatchLinks(
   englishDisplayTitle: string,
   originalTitle: string,
@@ -1375,84 +1456,60 @@ async function findWatchLinks(
   uzTitle?: string,
   imdbId?: string | null,
 ): Promise<WatchLink[]> {
-  const a = (originalTitle || '').trim();
-  const b = (englishDisplayTitle || '').trim();
-  const uz = (uzTitle || '').trim();
+  const a   = (originalTitle || '').trim();
+  const b   = (englishDisplayTitle || '').trim();
+  const uz  = (uzTitle || '').trim();
   const allTitles = [...new Set([a, b, uz].filter(x => x.length > 0))];
+  const primary   = a || b;
+  const tt        = imdbId && /^tt\d+$/i.test(imdbId) ? imdbId : null;
 
-  const searchTitles = [...new Set([a, b].filter((x) => x.length > 0))];
-  const primary = searchTitles[0] || b;
-
-  const qUz1 = `${primary} ${year} o'zbek tilida`.trim();
-  const qUz2 = `${primary} o'zbek tilida`.trim();
-  const qUz3 = `${primary} uzbek tilida`.trim();
-  const qRu = `${primary} смотреть онлайн`;
-
-  const extraTitle = searchTitles.length > 1 && searchTitles[1] !== primary ? searchTitles[1] : null;
-  const qUzAlt = extraTitle ? `${extraTitle} o'zbek tilida`.trim() : null;
-
-  const needUzTitleSearch = uz && uz.toLowerCase() !== primary.toLowerCase()
-    && (!extraTitle || uz.toLowerCase() !== extraTitle.toLowerCase());
-  const qUzT1 = needUzTitleSearch ? `${uz} o'zbek tilida` : null;
-  const qUzT2 = needUzTitleSearch ? `${uz} ${year} o'zbek tilida` : null;
-
-  const tt = imdbId && /^tt\d+$/i.test(imdbId) ? imdbId : null;
-  const qImdbUz = tt ? `${tt} o'zbek tilida` : null;
-  const qImdbRu = tt ? `${tt} смотреть онлайн` : null;
-
-  const settle = (r: PromiseSettledResult<SerperResult[]>) =>
-    r.status === 'fulfilled' ? r.value : [];
-
-  const [
-    resUz1, resUz2, resUz3, resRu, resUzAlt, resUzT1, resUzT2, resImdbUz, resImdbRu,
-  ] = await Promise.allSettled([
-    serperSearch(qUz1, 'uz', 'uz'),
-    serperSearch(qUz2, 'uz', 'uz'),
-    serperSearch(qUz3, 'uz', 'uz'),
-    serperSearch(qRu, 'ru', 'ru'),
-    qUzAlt ? serperSearch(qUzAlt, 'uz', 'uz') : Promise.resolve([] as SerperResult[]),
-    qUzT1 ? serperSearch(qUzT1, 'uz', 'uz') : Promise.resolve([] as SerperResult[]),
-    qUzT2 ? serperSearch(qUzT2, 'uz', 'uz') : Promise.resolve([] as SerperResult[]),
-    qImdbUz ? serperSearch(qImdbUz, 'uz', 'uz') : Promise.resolve([] as SerperResult[]),
-    qImdbRu ? serperSearch(qImdbRu, 'ru', 'ru') : Promise.resolve([] as SerperResult[]),
-  ]);
-
-  const uzResults = [
-    ...settle(resImdbUz),
-    ...settle(resUzT1), ...settle(resUzT2),
-    ...settle(resUz1), ...settle(resUz2), ...settle(resUz3),
-    ...settle(resUzAlt),
-  ];
-  const ruResults = [...settle(resImdbRu), ...settle(resRu)];
-
-  const seen = new Set<string>();
+  const seen       = new Set<string>();
   const finalLinks: WatchLink[] = [];
 
-  collectWatchLinksFromResults(uzResults, seen, finalLinks, allTitles, year, imdbId, 'uz', false, 3);
+  // ── Step 1: O'zbek qidiruv ───────────────────────────────────────────────
+  // Bitta query da year + har ikkala yozuv variantini qamrab oladi (10 natija kifoya)
+  const qUz = year
+    ? `${primary} ${year} uzbek o'zbek tilida`
+    : `${primary} uzbek o'zbek tilida`;
 
-  const ruCountLimit = finalLinks.length === 0 ? 3 : 2;
-  let ruAdded = 0;
-  for (const item of ruResults) {
-    if (!isAllowedWatchUrl(item.link, item.title)) continue;
-    const host = canonHost(item.link);
-    if (seen.has(host)) continue;
-    if (!isLinkRelevantToMovie(item, allTitles, year, imdbId)) {
-      console.log(`🔗 Skipped (ru): ${host} — "${item.title?.slice(0, 60)}"`);
-      continue;
+  const uzRes = await serperSearch(qUz, 'uz', 'uz');
+
+  // O'zbekcha nomda alohida qidiruv faqat agar nom juda farqli bo'lsa
+  let uzTitleRes: SerperResult[] = [];
+  if (uz && uz.toLowerCase() !== primary.toLowerCase() && uz.length > 3) {
+    uzTitleRes = await serperSearch(`${uz} uzbek tilida`, 'uz', 'uz');
+  }
+
+  collectWatchLinksFromResults(
+    [...uzRes, ...uzTitleRes], seen, finalLinks, allTitles, year, imdbId, 'uz', false, 4
+  );
+
+  // ── Step 2: Rus qidiruv (faqat yetarli havola bo'lmasa) ─────────────────
+  if (finalLinks.length < 2) {
+    const ruRes = await serperSearch(`${primary} смотреть онлайн`, 'ru', 'ru');
+    for (const item of ruRes) {
+      if (finalLinks.length >= 5) break;
+      if (!isAllowedWatchUrl(item.link, item.title)) continue;
+      const host = canonHost(item.link);
+      if (seen.has(host)) continue;
+      if (!isLinkRelevantToMovie(item, allTitles, year, imdbId)) continue;
+      seen.add(host);
+      finalLinks.push({ title: item.title.length > 50 ? host : item.title, link: item.link, source: `${host} (RU)` });
     }
-    seen.add(host);
-    const ruTitle = item.title.length > 50 ? host : item.title;
-    finalLinks.push({ title: ruTitle, link: item.link, source: `${host} (RU)` });
-    ruAdded++;
-    if (ruAdded >= ruCountLimit || finalLinks.length >= 5) break;
   }
 
-  if (finalLinks.length < 4) {
-    collectWatchLinksFromResults(uzResults, seen, finalLinks, allTitles, year, imdbId, 'uz-fill', false, 0);
+  // ── Step 3: IMDb ID bilan aniq qidiruv (hali ham bo'sh bo'lsa) ──────────
+  if (finalLinks.length === 0 && tt) {
+    const imdbRes = await serperSearch(`${tt} o'zbek tilida смотреть`, 'uz', 'uz');
+    collectWatchLinksFromResults(imdbRes, seen, finalLinks, allTitles, year, imdbId, 'imdb', false, 3);
+    if (finalLinks.length === 0) {
+      relaxedFillFromResults(imdbRes, [], seen, finalLinks);
+    }
   }
 
+  // ── Fallback: hech narsa topilmasa — qat'iy filtr olmirish ──────────────
   if (finalLinks.length === 0) {
-    relaxedFillFromResults(uzResults, ruResults, seen, finalLinks);
+    relaxedFillFromResults([...uzRes, ...uzTitleRes], [], seen, finalLinks);
   }
 
   return finalLinks.slice(0, 5);

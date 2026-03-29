@@ -41,6 +41,22 @@ export async function handleText(ctx: Context): Promise<void> {
     return;
   }
 
+  // Faqat raqam (kino kodi emas)
+  if (/^\d+$/.test(text)) {
+    await ctx.reply(
+      '❓ Raqamdan film topib bo\'lmaydi.\n\n' +
+      'Film <b>nomini</b>, aktyor <b>ismini</b> yoki syujet <b>tavsifini</b> yozing.',
+      { parse_mode: 'HTML' }
+    );
+    return;
+  }
+
+  // Juda qisqa (1 harf)
+  if (text.replace(/\s+/g, '').length < 2) {
+    await ctx.reply('❓ Aniqroq yozing — film nomi, aktyor ismi yoki syujet tavsifi.');
+    return;
+  }
+
   // Keyingi foto yuborilsa context sifatida ishlatish uchun saqlanadi
   setUserTextContext(userId, text);
 
@@ -161,7 +177,7 @@ export async function handleText(ctx: Context): Promise<void> {
       }),
     });
 
-    await sendMovieResult(ctx, details, { pendingFeedbackToken: pendingToken });
+    await sendMovieResult(ctx, details, { pendingFeedbackToken: pendingToken, confidence: identified.confidence });
   } catch (err) {
     console.error('Text handler xato:', err);
     await ctx.api.editMessageText(

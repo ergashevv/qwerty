@@ -91,9 +91,14 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
   if (correct) {
     await maybeDonateAfterFeedbackYes(ctx).catch(() => {});
   } else {
+    const sourceHint = row.source === 'photo'
+      ? '📸 Boshqa kadr yoki aniqroq sahna bilan sinab ko\'ring\n'
+      : '';
     await ctx.reply(
-      '📸 Boshqa kadr yoki boshqa sahna bilan sinab ko\'ring\n' +
-      '✍️ Yoki filmni so\'zlar bilan tasvirlab yozing',
+      sourceHint +
+      '🎬 Qaysi film ekanini bilsangiz — <b>nomini yozing</b>, darhol topib beraman!\n' +
+      '✍️ Yoki filmni so\'zlar bilan qisqacha tasvirlab yozing.',
+      { parse_mode: 'HTML' }
     ).catch(() => {});
   }
 }

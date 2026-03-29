@@ -144,7 +144,7 @@ export async function handleInstagramReelUrl(ctx: Context, reelUrl: string): Pro
       keyboardKeepJson: JSON.stringify({ inline_keyboard: watchKb }),
     });
 
-    await sendMovieResult(ctx, details, { pendingFeedbackToken: pendingToken });
+    await sendMovieResult(ctx, details, { pendingFeedbackToken: pendingToken, confidence: identified.confidence });
   } catch (err) {
     console.error('Reels handler xato:', err);
     const msg =

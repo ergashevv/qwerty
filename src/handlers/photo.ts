@@ -105,7 +105,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
       chatId,
       msgId,
       STATUS_IDENTIFY_LINES,
-      () => identifyMovie(base64, mimeType),
+      () => identifyMovie(base64, mimeType, textHint),
       { intervalMs: 3000 }
     );
 
@@ -204,7 +204,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
       keyboardKeepJson: JSON.stringify({ inline_keyboard: watchKb }),
     });
 
-    await sendMovieResult(ctx, details, { pendingFeedbackToken: pendingToken });
+    await sendMovieResult(ctx, details, { pendingFeedbackToken: pendingToken, confidence: identified.confidence });
   } catch (err) {
     console.error('Photo handler xato:', err);
     await ctx.api.editMessageText(
@@ -242,19 +242,23 @@ export function buildWatchKeyboard(details: MovieDetails): InlineKeyboardButton[
 export async function sendMovieResult(
   ctx: Context,
   details: MovieDetails,
-  opts?: { pendingFeedbackToken?: string }
+  opts?: { pendingFeedbackToken?: string; confidence?: string | null }
 ): Promise<void> {
   const mainTitle = details.title || details.originalTitle || details.uzTitle;
   const uzLine = details.uzTitle && details.uzTitle !== mainTitle
     ? `\n📽 O'zbekcha: <b>${escHtml(details.uzTitle)}</b>` : '';
   const yearLine  = details.year ? ` | 📅 ${details.year}` : '';
   const ratingLine = details.rating !== 'N/A' ? ` | ⭐ ${details.rating}/10` : '';
+  const confidenceLine = opts?.confidence === 'medium'
+    ? `\n\n<i>🤖 AI taklifi — noto'g'ri bo'lishi mumkin.</i>`
+    : '';
 
   const caption = [
     `🎬 <b>${escHtml(mainTitle)}</b>${uzLine}`,
     `${yearLine}${ratingLine}`.trim(),
     ``,
     `📖 ${escHtml(details.plotUz.slice(0, 300))}${details.plotUz.length > 300 ? '...' : ''}`,
+    confidenceLine,
   ].filter(Boolean).join('\n');
 
   const watchButtons = buildWatchKeyboard(details);
