@@ -1319,12 +1319,15 @@ const ALLOWED_HOSTS = [
   'kinoxit.net','uzmovi.tv','uzmovi.com','uzmovi.uz',
   'uzfilms.uz','kinolar.uz','movieuz.net','kino.uz',
   'cinemakachucha.com','kinogo.uz','kinouzbek.com',
+  'freekino.net','uzbeklar.biz','hdkinolar.org','kinouzbek.net',
+  'uzkinolar.com','kinozal.uz','tomosha.uz','kinouz.net',
+  'uzplay.net','ziyouz.com','kinomor.uz','kinohd.uz',
   // Rossiya/CIS streaming
   'ok.ru','vk.com','vkvideo.ru','rutube.ru','dailymotion.com',
   'kinopoisk.ru','hd.kinopoisk.ru','ivi.ru','start.ru',
   'kinogo.biz','kinogo.fm','filmix.ac','lordfilm.rs','lordfilm.mx',
-  'rezka.ag','hdrezka.me','hdrezka.ag',
-  'yandex.ru',
+  'rezka.ag','hdrezka.me','hdrezka.ag','kinozal.tv','rutor.info',
+  'yandex.ru','smotret-online.ru','kinopub.me',
   // Global platformalar
   'netflix.com','primevideo.com','hbomax.com','max.com','disneyplus.com',
 ];
