@@ -1,5 +1,154 @@
 import { getAudienceStats } from '../db';
 import { getPostgresPool } from '../db/postgres';
+import { getReelsQueueDepth } from '../services/reelsQueue';
+
+export interface HealthCheckComponent {
+  status: 'ok' | 'degraded' | 'error';
+  /** Response time in milliseconds (where applicable) */
+  responseTimeMs?: number;
+  /** Human-readable detail */
+  detail?: string;
+}
+
+export interface HealthStatus {
+  /** Overall health: ok = all green, degraded = non-critical issues, error = critical failure */
+  status: 'ok' | 'degraded' | 'error';
+  /** ISO 8601 timestamp of this check */
+  timestamp: string;
+  /** Process uptime in seconds */
+  uptimeSeconds: number;
+  components: {
+    postgres: HealthCheckComponent;
+    reelsQueue: HealthCheckComponent;
+  };
+  metrics: {
+    /** Active users today */
+    dau: number;
+    /** Total registered users */
+    totalUsers: number;
+    /** Search requests in the last 24 h broken down by source */
+    searchRequestsH24: SearchRequestTriple;
+    /** Identification error rate in the last 24 h (0–1), null if no feedback yet */
+    errorRateH24: number | null;
+    /** Identification error rate in the last 1 h (0–1), null if no feedback yet */
+    errorRateH1: number | null;
+    /** Current reels queue depth (pending jobs) */
+    reelsQueueDepth: number;
+  };
+}
+
+export async function getHealthStatus(): Promise<HealthStatus> {
+  const now = new Date();
+  const uptimeSeconds = Math.floor(process.uptime());
+
+  // --- Postgres ping with timing ---
+  let postgresComponent: HealthCheckComponent;
+  let postgresOk = false;
+  try {
+    const pgStart = Date.now();
+    await getPostgresPool().query('SELECT 1');
+    const pgMs = Date.now() - pgStart;
+    postgresOk = true;
+    postgresComponent = {
+      status: pgMs > 2000 ? 'degraded' : 'ok',
+      responseTimeMs: pgMs,
+      detail: pgMs > 2000 ? 'slow response' : undefined,
+    };
+  } catch (e) {
+    postgresComponent = {
+      status: 'error',
+      detail: (e as Error).message.slice(0, 120),
+    };
+  }
+
+  // --- Reels queue depth ---
+  const reelsQueueDepth = getReelsQueueDepth();
+  const reelsQueueComponent: HealthCheckComponent = {
+    status: reelsQueueDepth > 20 ? 'degraded' : 'ok',
+    detail: reelsQueueDepth > 20 ? `${reelsQueueDepth} jobs pending` : undefined,
+  };
+
+  // --- Key metrics (best-effort; fall back to 0 on error) ---
+  let dau = 0;
+  let totalUsers = 0;
+  let searchH24: SearchRequestTriple = { ...EMPTY_SEARCH_TRIPLE };
+  let errorRateH24: number | null = null;
+  let errorRateH1: number | null = null;
+
+  if (postgresOk) {
+    try {
+      const aud = await getAudienceStats();
+      dau = aud.dau;
+      totalUsers = aud.totalUsers;
+    } catch { /* ignore */ }
+
+    try {
+      const nowSec = Math.floor(Date.now() / 1000);
+      searchH24 = await searchRequestCountsSince(nowSec - 86400);
+    } catch { /* ignore */ }
+
+    // Error rate: wrong / (correct + wrong) for last 24 h and last 1 h
+    try {
+      const pool = getPostgresPool();
+      const [r24, r1] = await Promise.all([
+        pool.query(`
+          SELECT
+            COUNT(*) FILTER (WHERE (metadata->>'correct')::boolean = true)::int  AS ok,
+            COUNT(*) FILTER (WHERE (metadata->>'correct')::boolean = false)::int AS bad
+          FROM analytics_events
+          WHERE event_type = 'identification_feedback'
+            AND created_at >= NOW() - INTERVAL '24 hours'
+        `),
+        pool.query(`
+          SELECT
+            COUNT(*) FILTER (WHERE (metadata->>'correct')::boolean = true)::int  AS ok,
+            COUNT(*) FILTER (WHERE (metadata->>'correct')::boolean = false)::int AS bad
+          FROM analytics_events
+          WHERE event_type = 'identification_feedback'
+            AND created_at >= NOW() - INTERVAL '1 hour'
+        `),
+      ]);
+      const ok24 = Number(r24.rows[0]?.ok ?? 0);
+      const bad24 = Number(r24.rows[0]?.bad ?? 0);
+      const total24 = ok24 + bad24;
+      errorRateH24 = total24 > 0 ? Math.round((bad24 / total24) * 1000) / 1000 : null;
+
+      const ok1 = Number(r1.rows[0]?.ok ?? 0);
+      const bad1 = Number(r1.rows[0]?.bad ?? 0);
+      const total1 = ok1 + bad1;
+      errorRateH1 = total1 > 0 ? Math.round((bad1 / total1) * 1000) / 1000 : null;
+    } catch { /* ignore */ }
+  }
+
+  // --- Overall status ---
+  let overallStatus: HealthStatus['status'] = 'ok';
+  if (postgresComponent.status === 'error') {
+    overallStatus = 'error';
+  } else if (
+    postgresComponent.status === 'degraded' ||
+    reelsQueueComponent.status === 'degraded'
+  ) {
+    overallStatus = 'degraded';
+  }
+
+  return {
+    status: overallStatus,
+    timestamp: now.toISOString(),
+    uptimeSeconds,
+    components: {
+      postgres: postgresComponent,
+      reelsQueue: reelsQueueComponent,
+    },
+    metrics: {
+      dau,
+      totalUsers,
+      searchRequestsH24: searchH24,
+      errorRateH24,
+      errorRateH1,
+      reelsQueueDepth,
+    },
+  };
+}
 
 export interface DayPoint {
   label: string;

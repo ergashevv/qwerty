@@ -3,7 +3,7 @@ import session from 'express-session';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
-import { loadDashboardPayload, loadFeedbackEventsPage } from './statsService';
+import { loadDashboardPayload, loadFeedbackEventsPage, getHealthStatus } from './statsService';
 import { renderFeedbackListPage } from './feedbackListHtml';
 
 function isPlausibleTelegramFileId(fileId: string): boolean {
@@ -861,6 +861,23 @@ export function startDashboard(): void {
   });
 
   app.get('/health', (_req, res) => res.status(200).json({ ok: true, service: 'kinova' }));
+
+  /** /healthz — no auth required; used by PM2, Railway, load balancers, and alerting tools.
+   *  Returns 200 when status is "ok" or "degraded", 503 when status is "error". */
+  app.get('/healthz', async (_req, res) => {
+    try {
+      const health = await getHealthStatus();
+      const httpStatus = health.status === 'error' ? 503 : 200;
+      res.status(httpStatus).json(health);
+    } catch (e) {
+      res.status(503).json({
+        status: 'error',
+        timestamp: new Date().toISOString(),
+        uptimeSeconds: Math.floor(process.uptime()),
+        detail: (e as Error).message.slice(0, 120),
+      });
+    }
+  });
 
   app.get('/login', (req, res) => {
     if (req.session.kinovaAuth) return res.redirect('/dashboard');
