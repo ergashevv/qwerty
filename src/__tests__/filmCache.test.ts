@@ -93,11 +93,11 @@ const hasDb = !!process.env.DATABASE_URL;
     expect(byTmdb?.uz_title).toBe(`Uz ${suffix}`);
 
     const pool = getPostgresPool();
-    const canon = canonicalCacheKey(tmdbId, 'movie');
-    const titleKeyRow = await pool.query(`SELECT cache_key FROM movie_cache WHERE uz_title = $1`, [`Uz ${suffix}`]);
+    const titleKeyRow = await pool.query(`SELECT cache_key, tmdb_id FROM movie_cache WHERE uz_title = $1`, [`Uz ${suffix}`]);
     const keys = titleKeyRow.rows.map((r: { cache_key: string }) => r.cache_key);
-    expect(keys).toContain(canon);
-    expect(keys.length).toBeGreaterThanOrEqual(1);
+    expect(keys.length).toBe(1);
+    expect(keys[0]).not.toMatch(/^tmdb:\d+:(movie|tv)$/);
+    expect((titleKeyRow.rows[0] as { tmdb_id: number }).tmdb_id).toBe(tmdbId);
 
     await pool.query(`DELETE FROM movie_cache WHERE uz_title = $1`, [`Uz ${suffix}`]);
   });

@@ -9,7 +9,6 @@ import {
   REELS_LIMIT_PER_WINDOW,
 } from '../config/limits';
 import { getPostgresPool } from './postgres';
-import { canonicalCacheKey } from './filmCacheKeys';
 
 function utcDayString(): string {
   return new Date().toISOString().slice(0, 10);
@@ -301,23 +300,25 @@ export async function getCached(title: string): Promise<MovieCacheEntry | null> 
   return row;
 }
 
-/** Bir xil film (boshqa sarlavha / screenshot) uchun TMDB asosidagi kesh. */
+/** Bir xil film (boshqa sarlavha / screenshot) uchun TMDB bo‘yicha kesh (bitta qator — title-hash kalit). */
 export async function getCachedByTmdb(tmdbId: number, mediaType: 'movie' | 'tv'): Promise<MovieCacheEntry | null> {
   const pool = getPostgresPool();
-  const key = canonicalCacheKey(tmdbId, mediaType);
   const now = Math.floor(Date.now() / 1000);
   const r = await pool.query(
     `SELECT cache_key, title, uz_title, original_title, year, poster_url, plot_uz, watch_links, rating, imdb_url, hit_count, tmdb_id, media_type
      FROM movie_cache
-     WHERE cache_key = $1 AND ($2 - created_at) < $3`,
-    [key, now, CACHE_TTL_SECONDS]
+     WHERE tmdb_id = $1 AND media_type = $2
+       AND ($3 - created_at) < $4
+     ORDER BY hit_count DESC, created_at DESC
+     LIMIT 1`,
+    [tmdbId, mediaType, now, CACHE_TTL_SECONDS]
   );
   const row = r.rows[0] as
     | (MovieCacheEntry & { cache_key: string; hit_count: number; watch_links: string | null })
     | undefined;
   if (!row) return null;
 
-  await pool.query(`UPDATE movie_cache SET hit_count = hit_count + 1 WHERE cache_key = $1`, [key]);
+  await pool.query(`UPDATE movie_cache SET hit_count = hit_count + 1 WHERE cache_key = $1`, [row.cache_key]);
   return row;
 }
 
@@ -328,13 +329,6 @@ export async function setCache(title: string, data: MovieCacheEntry, opts?: SetC
   const mediaType = opts?.mediaType ?? null;
 
   await upsertMovieCacheRow(titleKey, data, now, tmdbId, mediaType);
-
-  if (tmdbId != null && mediaType != null) {
-    const canonKey = canonicalCacheKey(tmdbId, mediaType);
-    if (canonKey !== titleKey) {
-      await upsertMovieCacheRow(canonKey, data, now, tmdbId, mediaType);
-    }
-  }
 }
 
 export async function upsertUser(telegramId: number, username?: string, firstName?: string): Promise<void> {

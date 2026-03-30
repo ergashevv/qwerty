@@ -98,6 +98,19 @@ export async function initPostgresSchema(): Promise<void> {
     EXCEPTION WHEN duplicate_object THEN NULL;
     END $$
   `);
+  /** TMDB bo‘yicha kesh qidiruv (ikki qatorli canonical kalit o‘rniga) */
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_movie_cache_tmdb_lookup
+    ON movie_cache (tmdb_id, media_type)
+    WHERE tmdb_id IS NOT NULL
+  `);
+  /**
+   * Eski dual-write: cache_key = 'tmdb:ID:movie|tv' — title qatori bilan bir xil ma’lumot,
+   * dashboardda dublikat. Bir marta olib tashlanadi.
+   */
+  await p.query(`
+    DELETE FROM movie_cache WHERE cache_key ~ '^tmdb:[0-9]+:(movie|tv)$'
+  `);
 
   await p.query(`
     CREATE TABLE IF NOT EXISTS film_photo_evidence (
