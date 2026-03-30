@@ -79,6 +79,40 @@ export async function initPostgresSchema(): Promise<void> {
   await p.query(`
     CREATE INDEX IF NOT EXISTS idx_movie_cache_created ON movie_cache (created_at)
   `);
+  await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE movie_cache ADD COLUMN tmdb_id INTEGER;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `);
+  await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE movie_cache ADD COLUMN media_type TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `);
+  await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE movie_cache ADD CONSTRAINT movie_cache_media_type_check
+        CHECK (media_type IS NULL OR media_type IN ('movie','tv'));
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$
+  `);
+
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS film_photo_evidence (
+      id BIGSERIAL PRIMARY KEY,
+      telegram_user_id BIGINT NOT NULL,
+      tmdb_id INTEGER NOT NULL,
+      media_type TEXT NOT NULL CHECK (media_type IN ('movie','tv')),
+      imdb_id TEXT,
+      telegram_file_id TEXT,
+      created_at BIGINT NOT NULL
+    )
+  `);
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_film_photo_evidence_tmdb ON film_photo_evidence (tmdb_id, media_type)
+  `);
 
   await p.query(`
     CREATE TABLE IF NOT EXISTS photo_requests (

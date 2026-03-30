@@ -1,6 +1,7 @@
 import { Context } from 'grammy';
 import type { InlineKeyboardMarkup } from 'grammy/types';
 import { insertAnalyticsEvent } from '../db/postgres';
+import { insertFilmPhotoEvidence } from '../db';
 import { consumePendingFeedback } from '../db/feedbackPending';
 import { tryBuildFeedbackThumbB64 } from '../services/feedbackThumb';
 import { maybeDonateAfterFeedbackYes } from './donatePrompt';
@@ -89,6 +90,20 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
   });
 
   if (correct) {
+    if (
+      row.source === 'photo' &&
+      row.photo_file_id &&
+      row.tmdb_id != null &&
+      (row.media_type === 'movie' || row.media_type === 'tv')
+    ) {
+      await insertFilmPhotoEvidence({
+        telegramUserId: row.telegram_user_id,
+        tmdbId: row.tmdb_id,
+        mediaType: row.media_type,
+        imdbId: row.imdb_id,
+        telegramFileId: row.photo_file_id,
+      }).catch(() => {});
+    }
     await maybeDonateAfterFeedbackYes(ctx).catch(() => {});
   } else {
     const sourceHint = row.source === 'photo'

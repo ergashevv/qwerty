@@ -3,6 +3,8 @@ import axios from 'axios';
 import { withGemini } from './geminiClient';
 import sharpLib from 'sharp';
 import { recognizeCelebrities, extractImdbId } from './rekognition';
+import type { MovieCacheEntry } from '../db';
+import { getCached, getCachedByTmdb } from '../db';
 
 export type MediaType = 'movie' | 'tv';
 
@@ -202,7 +204,7 @@ export function isNoisyTitle(title: string): boolean {
 
 // ─── TMDB ────────────────────────────────────────────────────────────────────
 
-interface TmdbResult {
+export interface TmdbResult {
   id: number; title?: string; name?: string;
   original_title?: string; original_name?: string;
   release_date?: string; first_air_date?: string;
@@ -1099,6 +1101,10 @@ export async function identifyFromTextDetailed(query: string): Promise<IdentifyF
         // Agar inglizcha sarlavha bo'sh bo'lsa, original sarlavhani ishlatamiz
         return found({ title: tmdbTitle || tmdbOrigTitle, type: tmdb.type });
       }
+      // O‘zbekcha / boshqa til so‘rovida TMDB birinchi natijasi juda mashhur bo‘lsa — shu film deb olamiz
+      if ((tmdb.result.vote_count ?? 0) >= 500) {
+        return found({ title: tmdbTitle || tmdbOrigTitle, type: tmdb.type });
+      }
     }
   }
 
@@ -1555,10 +1561,24 @@ async function findWatchLinks(
   return finalLinks.slice(0, 5);
 }
 
-export async function getMovieDetails(identified: MovieIdentified): Promise<MovieDetails> {
+export interface ResolvedTmdbMeta {
+  tmdbId: number;
+  mediaType: MediaType;
+  imdbId: string | null;
+  tmdbResult: TmdbResult;
+  displayTitle: string;
+  originalTitle: string;
+  year: string;
+}
+
+export type ResolveTmdbResult =
+  | { ok: true; meta: ResolvedTmdbMeta }
+  | { ok: false; imdbId: string | null };
+
+/** TMDB aniqlash (tarjima / havolalarsiz) — kesh va getMovieDetails uchun umumiy. */
+export async function resolveTmdbMetadata(identified: MovieIdentified): Promise<ResolveTmdbResult> {
   const { title, type } = identified;
 
-  // OMDb dan IMDb ID — birinchi mos keluvchi ba’zan boshqa film bo‘lishi mumkin; TMDB bilan tekshiramiz
   let imdbId: string | null = null;
   const omdb = await omdbSearch(title, type === 'tv' ? 'series' : 'movie');
   if (omdb) imdbId = omdb.imdbId;
@@ -1569,7 +1589,6 @@ export async function getMovieDetails(identified: MovieIdentified): Promise<Movi
     if (found) {
       const rt = found.result.title || found.result.name || '';
       const ro = found.result.original_title || found.result.original_name || '';
-      // SNG/CIS filmlar uchun: kirill/turk sarlavhalarini ham solishtirish
       if (titlesMatchNative(title, rt, ro)) {
         tmdbResult = found.result;
       } else {
@@ -1582,7 +1601,6 @@ export async function getMovieDetails(identified: MovieIdentified): Promise<Movi
     if (found) tmdbResult = found.result;
   }
 
-  // TMDb dan to'liq detallar (imdb_id shu yerda keladi)
   if (tmdbResult?.id) {
     try {
       const r = await axios.get(`https://api.themoviedb.org/3/${type}/${tmdbResult.id}`, {
@@ -1597,13 +1615,34 @@ export async function getMovieDetails(identified: MovieIdentified): Promise<Movi
     if (ext && /^tt\d+$/i.test(String(ext))) imdbId = String(ext);
   }
 
-  const displayTitle = (type === 'tv' ? tmdbResult?.name : tmdbResult?.title) || title;
-  const originalTitle = (type === 'tv' ? tmdbResult?.original_name : tmdbResult?.original_title) || title;
-  const year = ((type === 'tv' ? tmdbResult?.first_air_date : tmdbResult?.release_date) || '').split('-')[0];
-  const rating = tmdbResult?.vote_average ? tmdbResult.vote_average.toFixed(1) : 'N/A';
-  const posterUrl = tmdbResult?.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbResult.poster_path}` : null;
+  if (!tmdbResult?.id) {
+    return { ok: false, imdbId };
+  }
 
-  const englishPlot = tmdbResult?.overview || '';
+  const displayTitle = (type === 'tv' ? tmdbResult.name : tmdbResult.title) || title;
+  const originalTitle = (type === 'tv' ? tmdbResult.original_name : tmdbResult.original_title) || title;
+  const year = ((type === 'tv' ? tmdbResult.first_air_date : tmdbResult.release_date) || '').split('-')[0];
+
+  return {
+    ok: true,
+    meta: {
+      tmdbId: tmdbResult.id,
+      mediaType: type,
+      imdbId,
+      tmdbResult,
+      displayTitle,
+      originalTitle,
+      year,
+    },
+  };
+}
+
+export async function buildDetailsFromResolved(identified: MovieIdentified, meta: ResolvedTmdbMeta): Promise<MovieDetails> {
+  const { type } = identified;
+  const { tmdbResult, displayTitle, originalTitle, year, imdbId } = meta;
+  const rating = tmdbResult.vote_average ? tmdbResult.vote_average.toFixed(1) : 'N/A';
+  const posterUrl = tmdbResult.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbResult.poster_path}` : null;
+  const englishPlot = tmdbResult.overview || '';
   const uzTitle = await translateTitle(displayTitle, originalTitle, year, type);
   const [plotUz, watchLinks] = await Promise.all([
     englishPlot ? translateToUzbek(englishPlot) : Promise.resolve('Tavsif mavjud emas'),
@@ -1620,10 +1659,121 @@ export async function getMovieDetails(identified: MovieIdentified): Promise<Movi
     plotUz,
     imdbUrl: imdbId ? `https://www.imdb.com/title/${imdbId}` : null,
     watchLinks,
-    tmdbId: tmdbResult?.id ?? null,
+    tmdbId: tmdbResult.id ?? null,
     imdbId,
     mediaType: type,
   };
+}
+
+export async function buildDetailsWithoutTmdb(identified: MovieIdentified, imdbIdFromOmdb: string | null): Promise<MovieDetails> {
+  const { title, type } = identified;
+  const displayTitle = title;
+  const originalTitle = title;
+  const year = '';
+  const rating = 'N/A';
+  const posterUrl = null;
+  const englishPlot = '';
+  const uzTitle = await translateTitle(displayTitle, originalTitle, year, type);
+  const [plotUz, watchLinks] = await Promise.all([
+    englishPlot ? translateToUzbek(englishPlot) : Promise.resolve('Tavsif mavjud emas'),
+    findWatchLinks(displayTitle, originalTitle, year, uzTitle, imdbIdFromOmdb),
+  ]);
+
+  return {
+    title: displayTitle,
+    uzTitle,
+    originalTitle,
+    year,
+    rating,
+    posterUrl,
+    plotUz,
+    imdbUrl: imdbIdFromOmdb ? `https://www.imdb.com/title/${imdbIdFromOmdb}` : null,
+    watchLinks,
+    tmdbId: null,
+    imdbId: imdbIdFromOmdb,
+    mediaType: type,
+  };
+}
+
+export function movieDetailsFromCache(
+  cached: MovieCacheEntry,
+  opts: { tmdbId: number | null; imdbId: string | null; mediaType: MediaType }
+): MovieDetails {
+  const imdbUrl = opts.imdbId ? `https://www.imdb.com/title/${opts.imdbId}` : null;
+  let watchLinks: WatchLink[] = [];
+  try {
+    watchLinks = cached.watch_links ? (JSON.parse(cached.watch_links) as WatchLink[]) : [];
+  } catch {
+    watchLinks = [];
+  }
+  return {
+    title: cached.title,
+    uzTitle: cached.uz_title || cached.title,
+    originalTitle: cached.original_title || cached.title,
+    year: cached.year || '',
+    rating: cached.rating || 'N/A',
+    posterUrl: cached.poster_url || null,
+    plotUz: cached.plot_uz || 'Tavsif mavjud emas',
+    imdbUrl,
+    watchLinks,
+    tmdbId: opts.tmdbId,
+    imdbId: opts.imdbId,
+    mediaType: opts.mediaType,
+  };
+}
+
+export type FilmCacheResolveResult =
+  | { phase: 'hit'; details: MovieDetails }
+  | { phase: 'miss'; r: ResolveTmdbResult };
+
+/**
+ * Title kesh → TMDB resolve → canonical kesh. Miss bo‘lsa handler `withRotatingStatus` ichida build qiladi.
+ */
+export async function resolveFilmCachePhase(identified: MovieIdentified): Promise<FilmCacheResolveResult> {
+  const cachedTitle = await getCached(identified.title);
+  if (
+    cachedTitle &&
+    cacheEntryMatchesIdentified(identified, cachedTitle) &&
+    cachedWatchLinksNonEmpty(cachedTitle.watch_links) &&
+    cachedUzTitleIsValid(cachedTitle.uz_title)
+  ) {
+    return {
+      phase: 'hit',
+      details: movieDetailsFromCache(cachedTitle, {
+        tmdbId: cachedTitle.tmdb_id ?? null,
+        imdbId: imdbIdFromMovieUrl(cachedTitle.imdb_url),
+        mediaType: identified.type,
+      }),
+    };
+  }
+
+  const r = await resolveTmdbMetadata(identified);
+  if (r.ok) {
+    const cachedTmdb = await getCachedByTmdb(r.meta.tmdbId, r.meta.mediaType);
+    if (
+      cachedTmdb &&
+      cacheEntryMatchesIdentified(identified, cachedTmdb) &&
+      cachedWatchLinksNonEmpty(cachedTmdb.watch_links) &&
+      cachedUzTitleIsValid(cachedTmdb.uz_title)
+    ) {
+      return {
+        phase: 'hit',
+        details: movieDetailsFromCache(cachedTmdb, {
+          tmdbId: r.meta.tmdbId,
+          imdbId: r.meta.imdbId,
+          mediaType: r.meta.mediaType,
+        }),
+      };
+    }
+  }
+
+  return { phase: 'miss', r };
+}
+
+export async function getMovieDetails(identified: MovieIdentified): Promise<MovieDetails> {
+  const r = await resolveTmdbMetadata(identified);
+  if (!r.ok) return buildDetailsWithoutTmdb(identified, r.imdbId);
+  return buildDetailsFromResolved(identified, r.meta);
 }
 
 /** Instagram username validatsiya regex: harf, raqam, nuqta, pastki chiziq, 5-30 belgi */

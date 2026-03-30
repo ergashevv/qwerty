@@ -9,6 +9,7 @@ import {
   REELS_LIMIT_PER_WINDOW,
 } from '../config/limits';
 import { getPostgresPool } from './postgres';
+import { canonicalCacheKey } from './filmCacheKeys';
 
 function utcDayString(): string {
   return new Date().toISOString().slice(0, 10);
@@ -222,17 +223,71 @@ export interface MovieCacheEntry {
   watch_links?: string;
   rating?: string;
   imdb_url?: string;
+  /** TMDB asosidagi kesh qatori (canonical kalit) bilan to‘ldiriladi */
+  tmdb_id?: number | null;
+  media_type?: 'movie' | 'tv' | null;
 }
 
 // 30 kun: havola manzillari tez-tez o'zgarmaydi, qayta qidiruvni kamaytiradi
 const CACHE_TTL_SECONDS = 30 * 24 * 60 * 60;
+
+export interface SetCacheOptions {
+  tmdbId?: number | null;
+  mediaType?: 'movie' | 'tv' | null;
+}
+
+async function upsertMovieCacheRow(
+  cacheKey: string,
+  data: MovieCacheEntry,
+  now: number,
+  tmdbId: number | null,
+  mediaType: 'movie' | 'tv' | null
+): Promise<void> {
+  const pool = getPostgresPool();
+  await pool.query(
+    `
+    INSERT INTO movie_cache (
+      cache_key, title, uz_title, original_title, year, poster_url, plot_uz, watch_links, rating, imdb_url, created_at, hit_count, tmdb_id, media_type
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, $12, $13)
+    ON CONFLICT (cache_key) DO UPDATE SET
+      title = EXCLUDED.title,
+      uz_title = EXCLUDED.uz_title,
+      original_title = EXCLUDED.original_title,
+      year = EXCLUDED.year,
+      poster_url = EXCLUDED.poster_url,
+      plot_uz = EXCLUDED.plot_uz,
+      watch_links = EXCLUDED.watch_links,
+      rating = EXCLUDED.rating,
+      imdb_url = EXCLUDED.imdb_url,
+      created_at = EXCLUDED.created_at,
+      hit_count = 0,
+      tmdb_id = COALESCE(EXCLUDED.tmdb_id, movie_cache.tmdb_id),
+      media_type = COALESCE(EXCLUDED.media_type, movie_cache.media_type)
+  `,
+    [
+      cacheKey,
+      data.title,
+      data.uz_title ?? null,
+      data.original_title ?? null,
+      data.year ?? null,
+      data.poster_url ?? null,
+      data.plot_uz ?? null,
+      data.watch_links ?? null,
+      data.rating ?? null,
+      data.imdb_url ?? null,
+      now,
+      tmdbId,
+      mediaType,
+    ]
+  );
+}
 
 export async function getCached(title: string): Promise<MovieCacheEntry | null> {
   const pool = getPostgresPool();
   const key = cacheKey(title);
   const now = Math.floor(Date.now() / 1000);
   const r = await pool.query(
-    `SELECT cache_key, title, uz_title, original_title, year, poster_url, plot_uz, watch_links, rating, imdb_url, hit_count
+    `SELECT cache_key, title, uz_title, original_title, year, poster_url, plot_uz, watch_links, rating, imdb_url, hit_count, tmdb_id, media_type
      FROM movie_cache
      WHERE cache_key = $1 AND ($2 - created_at) < $3`,
     [key, now, CACHE_TTL_SECONDS]
@@ -246,42 +301,40 @@ export async function getCached(title: string): Promise<MovieCacheEntry | null> 
   return row;
 }
 
-export async function setCache(title: string, data: MovieCacheEntry): Promise<void> {
+/** Bir xil film (boshqa sarlavha / screenshot) uchun TMDB asosidagi kesh. */
+export async function getCachedByTmdb(tmdbId: number, mediaType: 'movie' | 'tv'): Promise<MovieCacheEntry | null> {
   const pool = getPostgresPool();
-  const key = cacheKey(title);
+  const key = canonicalCacheKey(tmdbId, mediaType);
   const now = Math.floor(Date.now() / 1000);
-  await pool.query(
-    `
-    INSERT INTO movie_cache (
-      cache_key, title, uz_title, original_title, year, poster_url, plot_uz, watch_links, rating, imdb_url, created_at, hit_count
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0)
-    ON CONFLICT (cache_key) DO UPDATE SET
-      title = EXCLUDED.title,
-      uz_title = EXCLUDED.uz_title,
-      original_title = EXCLUDED.original_title,
-      year = EXCLUDED.year,
-      poster_url = EXCLUDED.poster_url,
-      plot_uz = EXCLUDED.plot_uz,
-      watch_links = EXCLUDED.watch_links,
-      rating = EXCLUDED.rating,
-      imdb_url = EXCLUDED.imdb_url,
-      created_at = EXCLUDED.created_at,
-      hit_count = 0
-  `,
-    [
-      key,
-      data.title,
-      data.uz_title ?? null,
-      data.original_title ?? null,
-      data.year ?? null,
-      data.poster_url ?? null,
-      data.plot_uz ?? null,
-      data.watch_links ?? null,
-      data.rating ?? null,
-      data.imdb_url ?? null,
-      now,
-    ]
+  const r = await pool.query(
+    `SELECT cache_key, title, uz_title, original_title, year, poster_url, plot_uz, watch_links, rating, imdb_url, hit_count, tmdb_id, media_type
+     FROM movie_cache
+     WHERE cache_key = $1 AND ($2 - created_at) < $3`,
+    [key, now, CACHE_TTL_SECONDS]
   );
+  const row = r.rows[0] as
+    | (MovieCacheEntry & { cache_key: string; hit_count: number; watch_links: string | null })
+    | undefined;
+  if (!row) return null;
+
+  await pool.query(`UPDATE movie_cache SET hit_count = hit_count + 1 WHERE cache_key = $1`, [key]);
+  return row;
+}
+
+export async function setCache(title: string, data: MovieCacheEntry, opts?: SetCacheOptions): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const titleKey = cacheKey(title);
+  const tmdbId = opts?.tmdbId ?? null;
+  const mediaType = opts?.mediaType ?? null;
+
+  await upsertMovieCacheRow(titleKey, data, now, tmdbId, mediaType);
+
+  if (tmdbId != null && mediaType != null) {
+    const canonKey = canonicalCacheKey(tmdbId, mediaType);
+    if (canonKey !== titleKey) {
+      await upsertMovieCacheRow(canonKey, data, now, tmdbId, mediaType);
+    }
+  }
 }
 
 export async function upsertUser(telegramId: number, username?: string, firstName?: string): Promise<void> {
@@ -388,3 +441,7 @@ export async function getInstagramSourceStats(limit = 15): Promise<{ account: st
   );
   return r.rows as { account: string; count: number }[];
 }
+
+export { getPostgresPool, initPostgresSchema, closePostgresPool } from './postgres';
+export { insertFilmPhotoEvidence } from './filmEvidence';
+export { canonicalCacheKey, isCanonicalCacheKey } from './filmCacheKeys';

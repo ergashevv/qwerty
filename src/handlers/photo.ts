@@ -4,19 +4,16 @@ import axios from 'axios';
 import {
   identifyMovie,
   identifyFromTextDetailed,
-  getMovieDetails,
   MovieDetails,
-  imdbIdFromMovieUrl,
-  cacheEntryMatchesIdentified,
-  cachedWatchLinksNonEmpty,
-  cachedUzTitleIsValid,
+  buildDetailsFromResolved,
+  buildDetailsWithoutTmdb,
+  resolveFilmCachePhase,
   makeEmptyLinksSentinel,
   extractInstagramSource,
 } from '../services/movieService';
 import { insertAnalyticsEvent } from '../db/postgres';
 import { getRecentUserText, clearUserTextContext } from '../services/userContext';
 import {
-  getCached,
   setCache,
   upsertUser,
   canUserSendPhoto,
@@ -154,52 +151,46 @@ export async function handlePhoto(ctx: Context): Promise<void> {
       return;
     }
 
-    // Cache tekshirish
-    const cached = await getCached(identified.title);
+    const cacheRes = await resolveFilmCachePhase(identified);
     let details: MovieDetails;
 
-    if (cached && cacheEntryMatchesIdentified(identified, cached) && cachedWatchLinksNonEmpty(cached.watch_links) && cachedUzTitleIsValid(cached.uz_title)) {
+    if (cacheRes.phase === 'hit') {
       await ctx.api.editMessageText(
         chatId,
         msgId,
         `🎯 «${identified.title}» topildi — ma’lumotlar chiqarilmoqda...`
       );
-      details = {
-        title: cached.title,
-        uzTitle: cached.uz_title || cached.title,
-        originalTitle: cached.original_title || cached.title,
-        year: cached.year || '',
-        rating: cached.rating || 'N/A',
-        posterUrl: cached.poster_url || null,
-        plotUz: cached.plot_uz || 'Tavsif mavjud emas',
-        imdbUrl: cached.imdb_url || null,
-        watchLinks: cached.watch_links ? JSON.parse(cached.watch_links) : [],
-        tmdbId: null,
-        imdbId: imdbIdFromMovieUrl(cached.imdb_url || null),
-        mediaType: identified.type,
-      };
+      details = cacheRes.details;
     } else {
       const detailLines = STATUS_DETAILS_LINES(identified.title);
       await ctx.api.editMessageText(chatId, msgId, detailLines[0]);
+      const r = cacheRes.r;
       details = await withRotatingStatus(
         ctx,
         chatId,
         msgId,
         detailLines,
-        () => getMovieDetails(identified),
+        () =>
+          r.ok
+            ? buildDetailsFromResolved(identified, r.meta)
+            : buildDetailsWithoutTmdb(identified, r.imdbId),
         { intervalMs: 2800 }
       );
-      await setCache(identified.title, {
-        title: details.title,
-        uz_title: details.uzTitle,
-        original_title: details.originalTitle,
-        year: details.year,
-        poster_url: details.posterUrl || undefined,
-        plot_uz: details.plotUz,
-        watch_links: details.watchLinks.length > 0 ? JSON.stringify(details.watchLinks) : makeEmptyLinksSentinel(),
-        rating: details.rating,
-        imdb_url: details.imdbUrl || undefined,
-      });
+      await setCache(
+        identified.title,
+        {
+          title: details.title,
+          uz_title: details.uzTitle,
+          original_title: details.originalTitle,
+          year: details.year,
+          poster_url: details.posterUrl || undefined,
+          plot_uz: details.plotUz,
+          watch_links: details.watchLinks.length > 0 ? JSON.stringify(details.watchLinks) : makeEmptyLinksSentinel(),
+          rating: details.rating,
+          imdb_url: details.imdbUrl || undefined,
+        },
+        { tmdbId: details.tmdbId, mediaType: details.mediaType }
+      );
     }
 
     // Processing xabarini o'chirish

@@ -1,15 +1,12 @@
 import { Context } from 'grammy';
 import {
   identifyFromTextDetailed,
-  getMovieDetails,
-  imdbIdFromMovieUrl,
-  cacheEntryMatchesIdentified,
-  cachedWatchLinksNonEmpty,
-  cachedUzTitleIsValid,
+  buildDetailsFromResolved,
+  buildDetailsWithoutTmdb,
+  resolveFilmCachePhase,
   makeEmptyLinksSentinel,
 } from '../services/movieService';
 import {
-  getCached,
   setCache,
   upsertUser,
   incrementUserRequests,
@@ -113,46 +110,41 @@ export async function handleText(ctx: Context): Promise<void> {
 
     await ctx.api.editMessageText(ctx.chat!.id, processing.message_id, `🎯 "${identified.title}" topildi! Yuklanmoqda...`);
 
-    const cached = await getCached(identified.title);
+    const cacheRes = await resolveFilmCachePhase(identified);
     let details;
 
-    if (cached && cacheEntryMatchesIdentified(identified, cached) && cachedWatchLinksNonEmpty(cached.watch_links) && cachedUzTitleIsValid(cached.uz_title)) {
-      details = {
-        title: cached.title,
-        uzTitle: cached.uz_title || cached.title,
-        originalTitle: cached.original_title || cached.title,
-        year: cached.year || '',
-        rating: cached.rating || 'N/A',
-        posterUrl: cached.poster_url || null,
-        plotUz: cached.plot_uz || 'Tavsif mavjud emas',
-        imdbUrl: cached.imdb_url || null,
-        watchLinks: cached.watch_links ? JSON.parse(cached.watch_links) : [],
-        tmdbId: null,
-        imdbId: imdbIdFromMovieUrl(cached.imdb_url || null),
-        mediaType: identified.type,
-      };
+    if (cacheRes.phase === 'hit') {
+      details = cacheRes.details;
     } else {
       const detailLines = STATUS_DETAILS_LINES(identified.title);
       await ctx.api.editMessageText(ctx.chat!.id, processing.message_id, detailLines[0]);
+      const r = cacheRes.r;
       details = await withRotatingStatus(
         ctx,
         ctx.chat!.id,
         processing.message_id,
         detailLines,
-        () => getMovieDetails(identified),
+        () =>
+          r.ok
+            ? buildDetailsFromResolved(identified, r.meta)
+            : buildDetailsWithoutTmdb(identified, r.imdbId),
         { intervalMs: 2800 }
       );
-      await setCache(identified.title, {
-        title: details.title,
-        uz_title: details.uzTitle,
-        original_title: details.originalTitle,
-        year: details.year,
-        poster_url: details.posterUrl || undefined,
-        plot_uz: details.plotUz,
-        watch_links: details.watchLinks.length > 0 ? JSON.stringify(details.watchLinks) : makeEmptyLinksSentinel(),
-        rating: details.rating,
-        imdb_url: details.imdbUrl || undefined,
-      });
+      await setCache(
+        identified.title,
+        {
+          title: details.title,
+          uz_title: details.uzTitle,
+          original_title: details.originalTitle,
+          year: details.year,
+          poster_url: details.posterUrl || undefined,
+          plot_uz: details.plotUz,
+          watch_links: details.watchLinks.length > 0 ? JSON.stringify(details.watchLinks) : makeEmptyLinksSentinel(),
+          rating: details.rating,
+          imdb_url: details.imdbUrl || undefined,
+        },
+        { tmdbId: details.tmdbId, mediaType: details.mediaType }
+      );
     }
 
     await ctx.api.deleteMessage(ctx.chat!.id, processing.message_id);
