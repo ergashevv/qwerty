@@ -3,6 +3,7 @@ import { upsertUser, recordUserActivityDay } from '../db';
 import { insertAnalyticsEvent } from '../db/postgres';
 import {
   clearProblemReportPending,
+  FREE_COMPLAINT_SENTINEL,
   getProblemReportPending,
   insertIdentificationProblemReport,
   resetFeedbackNoStreak,
@@ -35,13 +36,15 @@ export async function tryCompleteProblemReport(
     );
     await clearProblemReportPending(userId);
     await resetFeedbackNoStreak(userId);
+    const freeComplaint = problemReportCtx.predictedTitle === FREE_COMPLAINT_SENTINEL;
     await insertAnalyticsEvent('identification_problem_report', {
       report_id: reportId,
       telegram_user_id: userId,
-      predicted_title: problemReportCtx.predictedTitle,
-      predicted_uz_title: problemReportCtx.predictedUzTitle,
+      predicted_title: freeComplaint ? null : problemReportCtx.predictedTitle,
+      predicted_uz_title: freeComplaint ? null : problemReportCtx.predictedUzTitle,
       source: problemReportCtx.source,
       body_preview: bodyText.slice(0, 500),
+      ...(freeComplaint ? { complaint_kind: 'free_text' } : {}),
     });
     await ctx.reply(
       'Rahmat! Yozganingiz qabul qilindi — jamoamiz xabarni ko‘rib chiqadi. Yangi qidiruvni davom ettirishingiz mumkin.',

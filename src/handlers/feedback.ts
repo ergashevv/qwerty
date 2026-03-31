@@ -5,7 +5,6 @@ import { insertFilmPhotoEvidence } from '../db';
 import { consumePendingFeedback } from '../db/feedbackPending';
 import {
   clearProblemReportPending,
-  incrementFeedbackNoStreak,
   resetFeedbackNoStreak,
   setProblemReportPending,
 } from '../db/feedbackProblemReport';
@@ -121,46 +120,25 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
     }
     await maybeDonateAfterFeedbackYes(ctx).catch(() => {});
   } else {
-    const streak = await incrementFeedbackNoStreak(uid);
-    if (streak === 1) {
-      const sourceHint =
-        row.source === 'photo'
-          ? '📸 Boshqa kadr yoki aniqroq sahna bilan sinab ko‘ring\n'
-          : '';
-      await safeReply(
-        ctx,
-        sourceHint +
-          '🎬 Qaysi film ekanini bilsangiz — <b>nomini yozing</b>, darhol topib beraman!\n' +
-          '✍️ Yoki filmni so‘zlar bilan qisqacha tasvirlab yozing.',
-        { parse_mode: 'HTML' }
-      );
-      return;
-    }
-
     await setProblemReportPending(uid, {
       predictedTitle: row.predicted_title,
       predictedUzTitle: row.predicted_uz_title,
       source: row.source,
     });
 
-    if (streak === 2) {
-      await safeReply(
-        ctx,
-        '💬 <b>Bizga yordam bering</b>\n\n' +
-          'Ikki marta ketma-ket noto‘g‘ri topilganga o‘xshaydi. Iltimos, qisqa yozing:\n' +
-          '• nimani qanday noto‘g‘ri deb hisoblaysiz\n' +
-          '• qanday yaxshiroq bo‘lishini xohlaysiz\n\n' +
-          'Keyingi <b>bitta</b> matn xabaringiz avtomatik qabul qilinadi. Rasm yuborsangiz, izohni caption qilib yozing.\n\n' +
-          '<i>Bekor qilish: /cancel · Batafsil: /feedback</i>',
-        { parse_mode: 'HTML' }
-      );
-    } else {
-      await safeReply(
-        ctx,
-        '📝 Shikoyat matningizni hali yubormadingiz. Bitta matn yuboring — yoki yangi qidiruv uchun boshqa kadr yoki film nomini yuboring.\n\n' +
-          '<i>/cancel · /feedback</i>',
-        { parse_mode: 'HTML' }
-      );
-    }
+    const sourceHint =
+      row.source === 'photo'
+        ? '📸 Boshqa kadr yoki aniqroq sahna bilan sinab ko‘ring — yoki\n'
+        : '';
+
+    await safeReply(
+      ctx,
+      sourceHint +
+        '💬 <b>Shikoyat yozing</b>\n\n' +
+        'Keyingi <b>bitta</b> matn xabaringiz shikoyat sifatida jamoamizga yetadi. ' +
+        'Rasm yuborsangiz, izohni caption qilib yozing.\n\n' +
+        '<i>Bekor qilish: /cancel · Yordam: /feedback</i>',
+      { parse_mode: 'HTML' }
+    );
   }
 }

@@ -33,7 +33,7 @@ import {
   withRotatingStatus,
 } from './rotatingStatus';
 import { maybeDonateAfterSuccess } from './donatePrompt';
-import { safeEditOrNotify } from '../utils/safeTelegram';
+import { ackTyping, safeEditOrNotify } from '../utils/safeTelegram';
 import { getProblemReportPending } from '../db/feedbackProblemReport';
 import { tryCompleteProblemReport } from './problemReportSubmit';
 import { PROBLEM_REPORT_PHOTO_NEED_CAPTION_HTML } from '../messages/feedback';
@@ -46,6 +46,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
   if (!userId) return;
 
   const chatId = ctx.chat!.id;
+  ackTyping(ctx);
 
   if (await getProblemReportPending(userId)) {
     const captionForReport = ctx.message?.caption?.trim() ?? '';

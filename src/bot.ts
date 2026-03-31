@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { Bot, Composer, GrammyError, HttpError } from 'grammy';
-import { sequentialize } from '@grammyjs/runner';
+import { run, sequentialize } from '@grammyjs/runner';
 import { handlePhoto } from './handlers/photo';
 import { handleText } from './handlers/text';
 import {
@@ -26,12 +26,13 @@ import {
   clearProblemReportPending,
   getProblemReportPending,
   resetFeedbackNoStreak,
+  setFreeComplaintPending,
 } from './db/feedbackProblemReport';
 import {
   FEEDBACK_CANCEL_NOTHING_HTML,
   FEEDBACK_CANCEL_OK_HTML,
-  FEEDBACK_COMMAND_HELP_HTML,
   FEEDBACK_PENDING_REMINDER_HTML,
+  FEEDBACK_WRITE_NEXT_HTML,
 } from './messages/feedback';
 
 const _botToken = process.env.BOT_TOKEN;
@@ -63,6 +64,9 @@ async function bootstrap(): Promise<void> {
   }
 
   const bot = new Bot(botToken);
+
+  /** `@grammyjs/runner` `run()` handle — `SIGTERM` da `stop()` uchun */
+  let runnerHandle: ReturnType<typeof run> | undefined;
 
   /**
    * Callback query'lar `sequentialize` ichidagi xabar pipeline'iga tushmasligi kerak.
@@ -102,7 +106,7 @@ async function bootstrap(): Promise<void> {
         `📸 Screenshot · 🔗 Reels / YouTube · ✍️ matn — kadr yoki tavsifdan filmni topib, <b>o‘zbekcha</b> tomosha havolalarini beraman.\n\n` +
         `Har bir natijada pastda aynan shu ikkita tugma chiqadi:\n` +
         `<b>✅ Ha, shu film</b>     <b>❌ Yo'q, bu emas</b>\n\n` +
-        `To‘g‘ri topilsa — chapdagi, yo‘q bo‘lsa — o‘ngdagi. Fikringiz botni yaxshilaydi. Batafsil: <code>/feedback</code> 🇺🇿`,
+        `To‘g‘ri topilsa — chapdagi, yo‘q bo‘lsa — o‘ngdagi. Shikoyat: <code>/feedback</code> 🇺🇿`,
       { parse_mode: 'HTML' }
     );
   });
@@ -123,9 +127,8 @@ async function bootstrap(): Promise<void> {
         `🎬 Film nomi (o'zbekcha)\n` +
         `📖 Qisqacha mazmun\n` +
         `▶️ O'zbek tilida tomosha qilish havolalari\n\n` +
-        `<b>Fikr:</b> har bir natijada <b>✅ Ha, shu film</b> va <b>❌ Yo'q, bu emas</b> tugmalari. ` +
-        `Ketma-ket ikki marta «Yo'q, bu emas»dan keyin matnli izoh so‘raladi. ` +
-        `To‘liq ma’lumot: <code>/feedback</code>`,
+        `<b>Fikr:</b> <b>✅ Ha, shu film</b> / <b>❌ Yo'q, bu emas</b>. ` +
+        `Shikoyat yozish: <code>/feedback</code> — keyingi matn xabaringiz jamoamizga yetadi.`,
       { parse_mode: 'HTML' }
     );
   });
@@ -137,7 +140,8 @@ async function bootstrap(): Promise<void> {
       await ctx.reply(FEEDBACK_PENDING_REMINDER_HTML, { parse_mode: 'HTML' });
       return;
     }
-    await ctx.reply(FEEDBACK_COMMAND_HELP_HTML, { parse_mode: 'HTML' });
+    await setFreeComplaintPending(uid);
+    await ctx.reply(FEEDBACK_WRITE_NEXT_HTML, { parse_mode: 'HTML' });
   });
 
   bot.command('cancel', async (ctx) => {
@@ -289,7 +293,7 @@ async function bootstrap(): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`\n${signal} qabul qilindi — bot yopilmoqda...`);
     try {
-      await bot.stop();
+      await runnerHandle?.stop();
       console.log("✅ Bot to'xtatildi.");
     } catch (e) {
       console.error("Bot to'xtatishda xato:", e);
@@ -300,14 +304,33 @@ async function bootstrap(): Promise<void> {
   process.once('SIGTERM', () => void shutdown('SIGTERM'));
   process.once('SIGINT',  () => void shutdown('SIGINT'));
 
-  console.log('🤖 Kinova Bot ishga tushmoqda...');
-  await bot.start({
-    onStart: (info) => console.log(`✅ Bot ishga tushdi: @${info.username}`),
-    // Bot qayta ishlaganda Telegram eski (allaqachon muddati o'tgan) update'larni
-    // yuboradi — callback query'lar darhol "query is too old" beradi.
-    // Bu parametr restart paytidagi eski update'larni tashlab ketadi.
+  /**
+   * `bot.start()` barcha update'larni ketma-ket qayta ishlaydi — bir nechta
+   * foydalanuvchi uzoq foto/Gemini qidiruvida bo‘lsa, boshqa userlar callback
+   * tugmalari 10s dan kech chiqadi va Telegram "query is too old" beradi.
+   * `run()` parallel sink (default ~500) — `sequentialize` har bir user uchun
+   * tartibni saqlaydi.
+   */
+  await bot.init();
+  await bot.api.deleteWebhook({
     drop_pending_updates: true,
   });
+
+  const concurrency = Math.min(
+    500,
+    Math.max(10, Number(process.env.BOT_CONSUMER_CONCURRENCY || 100))
+  );
+
+  console.log('🤖 Kinova Bot ishga tushmoqda...');
+  runnerHandle = run(bot, {
+    sink: { concurrency },
+  });
+
+  const me = await bot.api.getMe();
+  console.log(`✅ Bot ishga tushdi: @${me.username} (parallel update: ${concurrency})`);
+
+  const task = runnerHandle.task();
+  if (task) await task;
 }
 
 void bootstrap().catch((e) => {

@@ -24,7 +24,7 @@ import { STATUS_DETAILS_LINES, withRotatingStatus } from './rotatingStatus';
 import { setUserTextContext } from '../services/userContext';
 import { completeSurveyProblemText, getSurveyProblemPending } from '../db/surveyBroadcast';
 import { tryCompleteProblemReport } from './problemReportSubmit';
-import { safeEditOrNotify, safeReply } from '../utils/safeTelegram';
+import { ackTyping, safeEditOrNotify, safeReply } from '../utils/safeTelegram';
 
 export async function handleText(ctx: Context): Promise<void> {
   const text = ctx.message?.text?.trim();
@@ -32,6 +32,7 @@ export async function handleText(ctx: Context): Promise<void> {
 
   const userId = ctx.from?.id;
   if (!userId) return;
+  ackTyping(ctx);
 
   const surveyPending = await getSurveyProblemPending(userId);
   if (surveyPending) {
@@ -122,8 +123,7 @@ export async function handleText(ctx: Context): Promise<void> {
   try {
     processing = await ctx.reply('🔍 Qidirilmoqda...');
     void ctx.api.sendChatAction(ctx.chat!.id, 'typing');
-
-    await recordSearchRequest(userId, 'text', { queryText: text });
+    void recordSearchRequest(userId, 'text', { queryText: text }).catch(() => {});
 
     const idOutcome = await withRotatingStatus(
       ctx,

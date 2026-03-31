@@ -18,7 +18,7 @@ import { enqueueReelsJob } from '../services/reelsQueue';
 import { identifyMovieFromReelVideo } from '../services/reelsPipeline';
 import { REELS_LIMIT_PER_WINDOW, REELS_WINDOW_SECONDS } from '../config/limits';
 import { STATUS_DETAILS_LINES, STATUS_IDENTIFY_LINES, withRotatingStatus } from './rotatingStatus';
-import { safeEditOrNotify } from '../utils/safeTelegram';
+import { ackTyping, safeEditOrNotify } from '../utils/safeTelegram';
 import { extractUserHintBesideFirstUrl } from '../services/reelsUrl';
 
 export type VideoLinkPlatform = 'instagram' | 'youtube';
@@ -63,6 +63,7 @@ export interface HandleVideoLinkOpts {
 export async function handleVideoLink(ctx: Context, videoUrl: string, opts: HandleVideoLinkOpts): Promise<void> {
   const userId = ctx.from?.id;
   if (!userId) return;
+  ackTyping(ctx);
 
   const reserved = await tryReserveReelsSlot(userId);
   if (!reserved) {
@@ -83,9 +84,8 @@ export async function handleVideoLink(ctx: Context, videoUrl: string, opts: Hand
   const queryForFeedback = opts.fullText?.trim().slice(0, 4000) || null;
 
   try {
-    await recordSearchRequest(userId, 'reels');
-
     processing = await ctx.reply(c.check);
+    void recordSearchRequest(userId, 'reels').catch(() => {});
     const msgId = processing.message_id;
     void ctx.api.sendChatAction(chatId, 'typing');
 

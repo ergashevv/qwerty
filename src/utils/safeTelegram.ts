@@ -1,5 +1,15 @@
 import type { Context } from 'grammy';
 
+/**
+ * Telegram darhol “bot yozmoqda” ko‘rsatadi — await qilinmaydi, og‘ir ishni bloklamaydi.
+ * Har qanday uzoq jarayondan oldin chaqiring (DB, Gemini, yt-dlp va hokazo).
+ */
+export function ackTyping(ctx: Context): void {
+  const id = ctx.chat?.id;
+  if (id == null) return;
+  void Promise.resolve(ctx.api.sendChatAction(id, 'typing')).catch(() => {});
+}
+
 /** Reply xatolikda ham chatga xabar yetishi uchun */
 export async function safeReply(ctx: Context, text: string, extra?: Parameters<Context['reply']>[1]): Promise<void> {
   try {
