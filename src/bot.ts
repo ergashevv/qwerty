@@ -13,6 +13,7 @@ import {
 } from './db';
 import { getPostgresPool, initPostgresSchema, pingPostgres, runAnalyticsRetention } from './db/postgres';
 import { handleIdentificationFeedback } from './handlers/feedback';
+import { handleShareCard } from './handlers/shareCard';
 import { handleDonateCallback } from './handlers/donatePrompt';
 import {
   buildDonateBroadcastConfirmKeyboard,
@@ -82,6 +83,10 @@ async function bootstrap(): Promise<void> {
     await handleIdentificationFeedback(ctx);
   });
 
+  bot.callbackQuery(/^shc:/, async (ctx) => {
+    await handleShareCard(ctx);
+  });
+
   bot.callbackQuery(/^svy:/, async (ctx) => {
     await handleSurveyCallback(ctx);
   });
@@ -104,9 +109,8 @@ async function bootstrap(): Promise<void> {
     await ctx.reply(
       `Assalomu alaykum, <b>${name}</b>! 🎬\n\n` +
         `📸 Screenshot · 🔗 Reels / YouTube · ✍️ matn — kadr yoki tavsifdan filmni topib, <b>o‘zbekcha</b> tomosha havolalarini beraman.\n\n` +
-        `Har bir natijada pastda aynan shu ikkita tugma chiqadi:\n` +
-        `<b>✅ Ha, shu film</b>     <b>❌ Yo'q, bu emas</b>\n\n` +
-        `To‘g‘ri topilsa — chapdagi, yo‘q bo‘lsa — o‘ngdagi. Shikoyat: <code>/feedback</code> 🇺🇿`,
+        `Pastda: tomosha havolalari, <b>✅ Ha</b> / <b>❌ Yo‘q</b>, <b>📤 Ulashish karti</b> (Story).\n\n` +
+        `To‘g‘ri topilsa — ✅, yo‘q bo‘lsa — ❌. Shikoyat: <code>/feedback</code> 🇺🇿`,
       { parse_mode: 'HTML' }
     );
   });
@@ -126,7 +130,7 @@ async function bootstrap(): Promise<void> {
         `<b>Natijada:</b>\n` +
         `🎬 Film nomi (o'zbekcha)\n` +
         `📖 Qisqacha mazmun\n` +
-        `▶️ O'zbek tilida tomosha qilish havolalari\n\n` +
+        `▶️ Tomosha havolalari · 📤 Story uchun ulashish karti\n\n` +
         `<b>Fikr:</b> <b>✅ Ha, shu film</b> / <b>❌ Yo'q, bu emas</b>. ` +
         `Shikoyat yozish: <code>/feedback</code> — keyingi matn xabaringiz jamoamizga yetadi.`,
       { parse_mode: 'HTML' }

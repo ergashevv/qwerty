@@ -115,6 +115,22 @@ export async function initPostgresSchema(): Promise<void> {
    */
   await p.query(`DELETE FROM movie_cache WHERE cache_key LIKE 'tmdb:%'`);
 
+  /** Instagram / YouTube havolasi → bir marta aniqlangan film (yt-dlp + AI qayta ishlatmaslik) */
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS video_url_cache (
+      url_hash TEXT PRIMARY KEY,
+      normalized_url TEXT NOT NULL,
+      title TEXT NOT NULL,
+      media_type TEXT NOT NULL CHECK (media_type IN ('movie','tv')),
+      tmdb_id INTEGER,
+      created_at BIGINT NOT NULL,
+      hit_count INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_video_url_cache_created ON video_url_cache (created_at)
+  `);
+
   await p.query(`
     CREATE TABLE IF NOT EXISTS film_photo_evidence (
       id BIGSERIAL PRIMARY KEY,

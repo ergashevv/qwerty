@@ -11,6 +11,7 @@ import {
   resolveFilmCachePhase,
   makeEmptyLinksSentinel,
   extractInstagramSource,
+  getActorFilmFallbackCandidates,
 } from '../services/movieService';
 import { insertAnalyticsEvent } from '../db/postgres';
 import { getRecentUserText, clearUserTextContext } from '../services/userContext';
@@ -164,14 +165,38 @@ export async function handlePhoto(ctx: Context): Promise<void> {
         : '';
       const geminiRejected =
         photoFail && !photoFail.ok && photoFail.reason === 'gemini_verify_failed';
-      const body = geminiRejected
+      let body = geminiRejected
         ? '🔍 <b>Nomzodlar topildi</b>, lekin kadr tanlangan film bilan to‘liq mos kelishini tasdiqlay olmadim — xato deb chiqarib yubormayapman.\n\n' +
-          '📸 Boshqa kadr yoki aniqroq sahna yuboring (yuz / muhit yaxshi ko‘rinsin).\n' +
-          '✍️ Yoki rasmga izoh yozing — yoki filmni matn bilan batafsilroq tasvirlab yuboring.'
-        : '🤔 Bu screenshotdan filmni aniqlay olmadim.' + hintMsg + '\n\n' +
-          '📸 Aniqroq kadr yoki boshqa sahna yuborib ko‘ring\n' +
-          '✍️ Yoki filmni so‘zlar bilan tasvirlab yozing';
-      await ctx.api.editMessageText(chatId, processing.message_id, body, { parse_mode: 'HTML' });
+          '<b>Keyingi qadam:</b>\n' +
+          '• Boshqa kadr yoki aniqroq sahna (yuz / muhit yaxshi ko‘rinsin)\n' +
+          '• Rasmga qisqa izoh yozing\n' +
+          '• Filmni matn bilan batafsilroq tasvirlab yuboring'
+        : '🤔 Bu screenshotdan filmni aniqlay olmadim.' +
+          hintMsg +
+          '\n\n<b>Keyingi qadam:</b>\n' +
+          '• Yaxshi yoritilgan kadr yoki boshqa sahna yuboring\n' +
+          '• Aktyor ismi yoki syujetni qisqacha yozing';
+
+      let replyMarkup: { inline_keyboard: { text: string; url: string }[][] } | undefined;
+      const fb = await getActorFilmFallbackCandidates(base64);
+      if (fb && fb.candidates.length > 0) {
+        body +=
+          `\n\n🎭 <b>Taxminiy tanilgan aktyor</b>: ${fb.actorNames.slice(0, 2).join(', ')}\n` +
+          `Quyidagi <i>taxminiy</i> filmlardan biri bo‘lishi mumkin:`;
+        replyMarkup = {
+          inline_keyboard: fb.candidates.map((c, i) => [
+            {
+              text: `${i + 1}. ${c.title.length > 46 ? `${c.title.slice(0, 45)}…` : c.title}`,
+              url: `https://www.google.com/search?q=${encodeURIComponent(`${c.title} film`)}`,
+            },
+          ]),
+        };
+      }
+
+      await ctx.api.editMessageText(chatId, processing.message_id, body, {
+        parse_mode: 'HTML',
+        reply_markup: replyMarkup,
+      });
       return;
     }
 
@@ -300,6 +325,7 @@ export async function sendMovieResult(
       { text: '✅ Ha, shu film', callback_data: `fb:${pTok}:y` },
       { text: "❌ Yo'q, bu emas", callback_data: `fb:${pTok}:n` },
     ]);
+    watchButtons.push([{ text: '📤 Ulashish karti', callback_data: `shc:${pTok}` }]);
   }
 
   const replyMarkup = { inline_keyboard: watchButtons };

@@ -11,8 +11,8 @@ const DOWNLOAD_TIMEOUT_MS = parseInt(process.env.REELS_DOWNLOAD_TIMEOUT_MS || '9
 const FFMPEG_TIMEOUT_MS = parseInt(process.env.REELS_FFMPEG_TIMEOUT_MS || '45000', 10);
 const MAX_FILE_MB = parseInt(process.env.REELS_MAX_DOWNLOAD_MB || '80', 10);
 
-/** Sekund — qisqa Reels uchun tez, sifatli kadrlar */
-const FRAME_OFFSETS_SEC = [0.5, 2.5, 5.0];
+/** Sekund — qora kadr / titr ehtimolini kamaytirish uchun bir nechta nuqta */
+const FRAME_OFFSETS_SEC = [0.5, 1.2, 2.5, 4.0, 5.5, 7.5];
 
 function runProcess(
   command: string,
@@ -107,14 +107,20 @@ export interface ReelsIdentifyResult extends Pick<MovieIdentified, 'title' | 'ty
   usedFrameIndex: number;
 }
 
+export type ReelsIdentifyOutcome =
+  | { ok: true; identified: ReelsIdentifyResult }
+  | { ok: false; lastFrameBase64: string | null };
+
 /**
  * Videodan ketma-kadrlar bilan identifyMovie — birinchi muvaffaqiyatli natija.
+ * Muvaffaqiyatsiz bo‘lsa, oxirgi olingan kadr (fallback: aktyor film taxminlari) uchun base64 qaytariladi.
  */
 export async function identifyMovieFromReelVideo(
   reelUrl: string,
   textHint?: string | null
-): Promise<ReelsIdentifyResult | null> {
+): Promise<ReelsIdentifyOutcome> {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kinova-reel-'));
+  let lastFrameBase64: string | null = null;
   try {
     const videoPath = await downloadVideo(reelUrl, workDir);
 
@@ -123,17 +129,21 @@ export async function identifyMovieFromReelVideo(
       const fp = await extractOneFrame(videoPath, workDir, off, i);
       if (!fp) continue;
       const base64 = fs.readFileSync(fp).toString('base64');
+      lastFrameBase64 = base64;
       const id = await identifyMovie(base64, 'image/jpeg', textHint?.trim() || null);
       if (id.ok && id.identified.title) {
         return {
-          title: id.identified.title,
-          type: id.identified.type,
-          confidence: id.identified.confidence,
-          usedFrameIndex: i,
+          ok: true,
+          identified: {
+            title: id.identified.title,
+            type: id.identified.type,
+            confidence: id.identified.confidence,
+            usedFrameIndex: i,
+          },
         };
       }
     }
-    return null;
+    return { ok: false, lastFrameBase64 };
   } finally {
     fs.rmSync(workDir, { recursive: true, force: true });
   }

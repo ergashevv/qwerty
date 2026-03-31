@@ -137,11 +137,12 @@ export async function handleText(ctx: Context): Promise<void> {
       await ctx.api.editMessageText(
         ctx.chat!.id,
         processing.message_id,
-        '❓ Aniq bitta filmni tanlab bo‘lmadi.\n\n' +
-          'Iltimos, qayta yozing — masalan:\n' +
-          '• taxminan qaysi yilda chiqqan\n' +
+        '❓ Bir nechta film mos keldi — bittasini tanlab bo‘lmadi.\n\n' +
+          '<b>Qayta yozing, aniqroq:</b>\n' +
+          '• taxminan yil (masalan: 2014)\n' +
           '• janr (drama, multfilm, ilmiy-fantastika…)\n' +
-          '• yoki aktyor / rejissor ismi'
+          '• aktyor yoki rejissor ismi',
+        { parse_mode: 'HTML' }
       );
       return;
     }
@@ -150,7 +151,13 @@ export async function handleText(ctx: Context): Promise<void> {
       await ctx.api.editMessageText(
         ctx.chat!.id,
         processing.message_id,
-        '❌ Film topilmadi. Aniqroq yozing:\n• Film nomi (inglizcha yoki o\'zbekcha)\n• Aktyor ismi\n• Syujet tavsifi'
+        '❌ Film topilmadi.\n\n' +
+          '<b>Keyingi qadam:</b>\n' +
+          '• Film nomi (ingliz yoki o‘zbek)\n' +
+          '• Aktyor yoki rejissor ismi\n' +
+          '• Yil yoki janr (masalan: 2010, drama)\n' +
+          '• Eskidan eslayotgan sahna yoki syujetni 2–3 qator yozing',
+        { parse_mode: 'HTML' }
       );
       return;
     }

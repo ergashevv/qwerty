@@ -47,6 +47,41 @@ async function pruneExpiredPending(): Promise<void> {
   await getPostgresPool().query(`DELETE FROM pending_identification_feedback WHERE created_at < $1`, [cutoff]);
 }
 
+export async function getPendingFeedbackByToken(
+  telegramUserId: number,
+  token: string
+): Promise<PendingFeedbackRow | null> {
+  await pruneExpiredPending();
+  const cutoff = Math.floor(Date.now() / 1000) - PENDING_TTL_SEC;
+  const r = await getPostgresPool().query(
+    `SELECT * FROM pending_identification_feedback
+     WHERE feedback_token = $1 AND telegram_user_id = $2 AND created_at >= $3`,
+    [token, telegramUserId, cutoff]
+  );
+  const raw = r.rows[0] as
+    | (PendingFeedbackRow & { id: string | number; telegram_user_id: string | number })
+    | undefined;
+  if (!raw) return null;
+  return {
+    id: Number(raw.id),
+    telegram_user_id: Number(raw.telegram_user_id),
+    chat_id: Number(raw.chat_id),
+    source: raw.source,
+    predicted_title: raw.predicted_title,
+    predicted_uz_title: raw.predicted_uz_title,
+    tmdb_id: raw.tmdb_id,
+    imdb_id: raw.imdb_id,
+    media_type: raw.media_type,
+    confidence: raw.confidence,
+    photo_file_id: raw.photo_file_id,
+    keyboard_keep_json: raw.keyboard_keep_json,
+    feedback_token: raw.feedback_token,
+    created_at: Number(raw.created_at),
+    user_query_text: raw.user_query_text != null ? String(raw.user_query_text) : null,
+    bot_reply_preview: raw.bot_reply_preview != null ? String(raw.bot_reply_preview) : null,
+  };
+}
+
 export async function insertPendingFeedback(row: PendingFeedbackInsert): Promise<string> {
   await pruneExpiredPending();
   const now = Math.floor(Date.now() / 1000);

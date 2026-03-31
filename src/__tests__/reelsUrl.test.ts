@@ -2,6 +2,8 @@ import {
   extractInstagramReelUrl,
   extractYouTubeUrl,
   extractUserHintBesideFirstUrl,
+  normalizeVideoUrlForCache,
+  hashVideoUrlForCache,
 } from '../services/reelsUrl';
 
 describe('extractInstagramReelUrl', () => {
@@ -51,5 +53,33 @@ describe('extractUserHintBesideFirstUrl', () => {
 
   it('faqat havola', () => {
     expect(extractUserHintBesideFirstUrl('https://youtu.be/dQw4w9WgXcQ')).toBeNull();
+  });
+});
+
+describe('normalizeVideoUrlForCache', () => {
+  it('YouTube watch — tracking olib tashlanadi', () => {
+    expect(
+      normalizeVideoUrlForCache('https://www.youtube.com/watch?v=dQw4w9WgXcQ&si=abc&t=12')
+    ).toBe('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+  });
+
+  it('youtu.be → watch', () => {
+    expect(normalizeVideoUrlForCache('https://youtu.be/dQw4w9WgXcQ?feature=share')).toBe(
+      'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+    );
+  });
+
+  it('Instagram reel — barqaror', () => {
+    expect(normalizeVideoUrlForCache('https://www.instagram.com/reel/ABC123/?igshid=x')).toBe(
+      'https://www.instagram.com/reel/ABC123/'
+    );
+  });
+
+  it('bir xil havola — bir xil xesh', () => {
+    const a = hashVideoUrlForCache('https://youtu.be/dQw4w9WgXcQ');
+    const b = hashVideoUrlForCache(
+      'https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLx'
+    );
+    expect(a).toBe(b);
   });
 });

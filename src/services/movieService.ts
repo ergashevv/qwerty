@@ -993,6 +993,47 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
   return { ok: false, reason: 'gemini_verify_failed' };
 }
 
+/**
+ * Yakuniy film tanlanmaganda: Rekognition topgan aktyor(lar) bo‘yicha TMDB (va kerak bo‘lsa Kinopoisk) dan top-3 taxmin.
+ */
+export async function getActorFilmFallbackCandidates(
+  base64: string
+): Promise<{ actorNames: string[]; candidates: MovieIdentified[] } | null> {
+  if (!TMDB_KEY) return null;
+  let cropped: string;
+  try {
+    cropped = await cropFrame(base64);
+  } catch {
+    cropped = base64;
+  }
+  const celebrities = await recognizeCelebrities(cropped);
+  if (celebrities.length === 0) return null;
+
+  const actorNames = celebrities.slice(0, 3).map((c) => c.name);
+  const primary = celebrities[0].name;
+  let films = await tmdbPersonMovies(primary);
+
+  if (films.length === 0 && KP_KEY) {
+    const kpFilms = await kinopoiskPersonMovies(primary);
+    const tmdbResults: TmdbResult[] = [];
+    for (const kf of kpFilms.slice(0, 15)) {
+      const searchTitle = kf.nameEn || kf.nameOriginal || kf.nameRu || '';
+      if (!searchTitle) continue;
+      const tmdbHit = await tmdbSearch(searchTitle);
+      if (tmdbHit?.result) tmdbResults.push(tmdbHit.result);
+    }
+    films = tmdbResults.sort(sortTmdbByRelevance).slice(0, PERSON_CREDITS_MAX);
+  }
+  if (films.length === 0) return null;
+
+  const candidates: MovieIdentified[] = films.slice(0, 3).map((c) => ({
+    title: c.title || c.name || '',
+    type: (c.media_type === 'tv' ? 'tv' : 'movie') as MediaType,
+    confidence: 'medium',
+  }));
+  return { actorNames, candidates };
+}
+
 // ─── MATN ORQALI FILM QIDIRISH ────────────────────────────────────────────────
 
 /**
