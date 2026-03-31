@@ -207,7 +207,7 @@ describe('Photo handler — darhol "Qidirilmoqda..." xabari', () => {
       PHOTO_DAILY_LIMIT: 20,
     }));
     jest.mock('../services/movieService', () => ({
-      identifyMovie: jest.fn(async () => null),
+      identifyMovie: jest.fn(async () => ({ ok: false, reason: 'no_candidates' })),
       getMovieDetails: jest.fn(),
       imdbIdFromMovieUrl: jest.fn(() => null),
       cacheEntryMatchesIdentified: jest.fn(() => false),

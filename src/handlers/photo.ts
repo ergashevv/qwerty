@@ -4,6 +4,7 @@ import axios from 'axios';
 import {
   identifyMovie,
   identifyFromTextDetailed,
+  type IdentifyMovieResult,
   MovieDetails,
   buildDetailsFromResolved,
   buildDetailsWithoutTmdb,
@@ -100,7 +101,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
     const recentTextHint = getRecentUserText(userId);
     const textHint = captionHint || recentTextHint || null;
 
-    let identified = await withRotatingStatus(
+    const idRes = await withRotatingStatus(
       ctx,
       chatId,
       msgId,
@@ -108,6 +109,9 @@ export async function handlePhoto(ctx: Context): Promise<void> {
       () => identifyMovie(base64, mimeType, textHint),
       { intervalMs: 3000 }
     );
+
+    let identified = idRes.ok ? idRes.identified : null;
+    const photoFail: IdentifyMovieResult | null = idRes.ok ? null : idRes;
 
     // Rasm orqali topilmadi — matn hint bilan fallback
     if (!identified && textHint) {
@@ -138,16 +142,18 @@ export async function handlePhoto(ctx: Context): Promise<void> {
 
     if (!identified) {
       const hintMsg = textHint
-        ? `\n\n💡 <i>"${textHint.slice(0, 40)}" so'rovi bilan ham sinab ko'rildim — topilmadi.</i>`
+        ? `\n\n💡 <i>"${textHint.slice(0, 40)}" bo'yicha matn qidiruv ham sinab ko'rildi — topilmadi.</i>`
         : '';
-      await ctx.api.editMessageText(
-        ctx.chat!.id,
-        processing.message_id,
-        '🤔 Bu screenshotdan filmni aniqlay olmadim.' + hintMsg + '\n\n' +
-          '📸 Aniqroq kadr yoki boshqa sahna yuborib koʼring\n' +
-          '✍️ Yoki filmni soʼzlar bilan tasvirlab yozing',
-        { parse_mode: 'HTML' }
-      );
+      const geminiRejected =
+        photoFail && !photoFail.ok && photoFail.reason === 'gemini_verify_failed';
+      const body = geminiRejected
+        ? '🔍 <b>Nomzodlar topildi</b>, lekin kadr tanlangan film bilan to‘liq mos kelishini tasdiqlay olmadim — xato deb chiqarib yubormayapman.\n\n' +
+          '📸 Boshqa kadr yoki aniqroq sahna yuboring (yuz / muhit yaxshi ko‘rinsin).\n' +
+          '✍️ Yoki rasmga izoh yozing — yoki filmni matn bilan batafsilroq tasvirlab yuboring.'
+        : '🤔 Bu screenshotdan filmni aniqlay olmadim.' + hintMsg + '\n\n' +
+          '📸 Aniqroq kadr yoki boshqa sahna yuborib ko‘ring\n' +
+          '✍️ Yoki filmni so‘zlar bilan tasvirlab yozing';
+      await ctx.api.editMessageText(ctx.chat!.id, processing.message_id, body, { parse_mode: 'HTML' });
       return;
     }
 

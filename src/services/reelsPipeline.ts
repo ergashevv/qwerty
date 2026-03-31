@@ -121,11 +121,11 @@ export async function identifyMovieFromReelVideo(reelUrl: string): Promise<Reels
       if (!fp) continue;
       const base64 = fs.readFileSync(fp).toString('base64');
       const id = await identifyMovie(base64, 'image/jpeg');
-      if (id?.title) {
+      if (id.ok && id.identified.title) {
         return {
-          title: id.title,
-          type: id.type,
-          confidence: id.confidence,
+          title: id.identified.title,
+          type: id.identified.type,
+          confidence: id.identified.confidence,
           usedFrameIndex: i,
         };
       }

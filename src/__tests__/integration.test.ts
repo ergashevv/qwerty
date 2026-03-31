@@ -358,15 +358,15 @@ describe('To\'liq pipeline: identifyMovie — haqiqiy rasm bilan', () => {
 
     console.log(`\n🎯 Pipeline natija: ${JSON.stringify(result)}`);
 
-    if (!result) {
-      console.log('❌ MUAMMO: identifyMovie null qaytardi — hech bir API ishlamadi yoki mos kelmadi');
-    } else if (result.title.toLowerCase().includes('iron man')) {
-      console.log(`✅ TO'G'RI: "${result.title}" (${result.type}, ${result.confidence})`);
+    if (!result.ok) {
+      console.log(`❌ MUAMMO: identifyMovie topilmadi — ${result.reason}`);
+    } else if (result.identified.title.toLowerCase().includes('iron man')) {
+      console.log(`✅ TO'G'RI: "${result.identified.title}" (${result.identified.type}, ${result.identified.confidence})`);
     } else {
-      console.log(`❌ NOTO'G'RI: "${result.title}" (kerak: Iron Man)`);
+      console.log(`❌ NOTO'G'RI: "${result.identified.title}" (kerak: Iron Man)`);
     }
 
-    expect(result).not.toBeNull();
+    expect(result.ok).toBe(true);
   });
 
   test('Parasite posteri → identifyMovie → "Parasite" topilishi kerak', async () => {
@@ -378,15 +378,15 @@ describe('To\'liq pipeline: identifyMovie — haqiqiy rasm bilan', () => {
 
     console.log(`Pipeline natija: ${JSON.stringify(result)}`);
 
-    if (!result) {
-      console.log('❌ MUAMMO: identifyMovie null qaytardi');
-    } else if (result.title.toLowerCase().includes('parasite')) {
-      console.log(`✅ TO'G'RI: "${result.title}"`);
+    if (!result.ok) {
+      console.log(`❌ MUAMMO: identifyMovie topilmadi — ${result.reason}`);
+    } else if (result.identified.title.toLowerCase().includes('parasite')) {
+      console.log(`✅ TO'G'RI: "${result.identified.title}"`);
     } else {
-      console.log(`⚠️ Boshqa natija: "${result.title}" (kerak: Parasite)`);
+      console.log(`⚠️ Boshqa natija: "${result.identified.title}" (kerak: Parasite)`);
     }
 
-    expect(result).not.toBeNull();
+    expect(result.ok).toBe(true);
   });
 });
 
@@ -441,29 +441,27 @@ describe('Vision — watermark va noise filtering', () => {
   });
 });
 
-// ─── 7. SERPER API ───────────────────────────────────────────────────────────
+// ─── 7. BRAVE SEARCH API (matn qidiruv) ─────────────────────────────────────
 
-describe('Serper API — tomosha havolalari qidirish', () => {
-  const serperKey = process.env.SERPER_API_KEY;
+describe('Brave Search API — matn qidiruv', () => {
+  const braveKey = process.env.BRAVE_SEARCH_API_KEY;
 
-  test('Serper API kalit mavjud', () => {
-    expect(serperKey).toBeTruthy();
-  });
-
-  test('"Iron Man o\'zbek tilida tomosha" uchun havolalar topilishi kerak', async () => {
-    const r = await axios.post(
-      'https://google.serper.dev/search',
-      { q: "Iron Man 2008 o'zbek tilida tomosha ko'rish", gl: 'uz', hl: 'uz', num: 10 },
-      {
-        headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
-        timeout: 10000,
-      }
-    );
-    const organic = r.data?.organic || [];
-    console.log(`Serper natijalar: ${organic.length} ta`);
-    organic.slice(0, 3).forEach((item: { title: string; link: string }) => {
-      console.log(`  - ${item.title}: ${item.link}`);
+  test('BRAVE_SEARCH_API_KEY bo‘lsa — "Iron Man" qidiruvida natija bo‘lishi kerak', async () => {
+    if (!braveKey) {
+      console.log('BRAVE_SEARCH_API_KEY yo‘q — test o‘tkazib yuborildi');
+      expect(true).toBe(true);
+      return;
+    }
+    const r = await axios.get('https://api.search.brave.com/res/v1/web/search', {
+      params: { q: "Iron Man 2008 o'zbek tilida tomosha", count: 5 },
+      headers: { 'X-Subscription-Token': braveKey, Accept: 'application/json' },
+      timeout: 15000,
     });
-    expect(organic.length).toBeGreaterThan(0);
+    const web = r.data?.web?.results || [];
+    console.log(`Brave natijalar: ${web.length} ta`);
+    web.slice(0, 3).forEach((item: { title: string; url: string }) => {
+      console.log(`  - ${item.title}: ${item.url}`);
+    });
+    expect(web.length).toBeGreaterThan(0);
   });
 });

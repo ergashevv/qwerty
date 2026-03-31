@@ -158,8 +158,9 @@ export async function handleSurveyCallback(ctx: Context): Promise<void> {
   }
 
   if (kind === 'n') {
-    await setSurveyProblemPending(uid, campaignId);
+    /** DB dan oldin — Telegram ~10s ichida callback ni yopish */
     await ctx.answerCallbackQuery();
+    await setSurveyProblemPending(uid, campaignId);
     try {
       await ctx.api.editMessageText(chatId, messageId, AFTER_NO_HTML, {
         parse_mode: 'HTML',

@@ -32,7 +32,7 @@ Asosiy o'zgaruvchilar:
 - `BOT_TOKEN` — Telegram bot token
 - `DATABASE_URL` — `postgresql://kinovabot:...@localhost:5432/kinovadb`
 - `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`
-- `TMDB_API_KEY`, `OMDB_API_KEY`, `SERPER_API_KEY`
+- `TMDB_API_KEY`, `OMDB_API_KEY`, `BRAVE_SEARCH_API_KEY` (ixtiyoriy fallback: `GOOGLE_CSE_KEY` / `GOOGLE_CSE_ID`)
 
 ## Developer (Nathan) ulanish
 SSH tunnel orqali:

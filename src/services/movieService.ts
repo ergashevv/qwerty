@@ -14,6 +14,11 @@ export interface MovieIdentified {
   confidence?: string;
 }
 
+/** Rasm bo‘yicha aniqlash: topilmadi — yoki nomzod bor lekin Gemini verify rad etdi */
+export type IdentifyMovieResult =
+  | { ok: true; identified: MovieIdentified }
+  | { ok: false; reason: 'no_candidates' | 'gemini_verify_failed' };
+
 export interface MovieDetails {
   title: string;
   uzTitle: string;
@@ -45,13 +50,12 @@ export interface WatchLink {
 
 const TMDB_KEY   = process.env.TMDB_API_KEY   || '';
 const OMDB_KEY   = process.env.OMDB_API_KEY   || '';
-const SERPER_KEY = process.env.SERPER_API_KEY  || '';
 const VISION_KEY = process.env.VISION_API_KEY  || '';
 const IMGBB_KEY  = process.env.IMGBB_API_KEY   || '';
 const GEMINI_KEY = process.env.GEMINI_API_KEY  || '';
 const KP_KEY     = process.env.KINOPOISK_API_KEY || '';
 const KP_BASE    = 'https://kinopoiskapiunofficial.tech';
-/** Matnli syujet qidiruvida Google Search grounding (pulli; Serper snippetlari ixtiyoriy o‘chadi). */
+/** Matnli syujet qidiruvida Google Search grounding (pulli). */
 const GEMINI_GROUNDING_TEXT = process.env.GEMINI_GROUNDING_TEXT_SEARCH === 'true';
 /** Faqat Gemini (multimodal + matn + tarjima). */
 const GEMINI_MODEL = 'gemini-2.5-flash';
@@ -158,7 +162,7 @@ export function cacheEntryMatchesIdentified(
 
 /**
  * Havola topilmagan filmlar uchun sentinel: {"empty":true,"at":UNIX_TS}.
- * 24 soat ichida qayta qidirmaslik — Serper/Brave kreditini tejaydi.
+ * 24 soat ichida qayta qidirmaslik — Brave / qidiruv limitini tejaydi.
  */
 const EMPTY_LINKS_COOLDOWN = 24 * 60 * 60;
 
@@ -335,7 +339,7 @@ async function omdbById(imdbId: string): Promise<{ title: string; type: MediaTyp
   return null;
 }
 
-// ─── SERPER / BRAVE / GOOGLE CSE ─────────────────────────────────────────────
+// ─── BRAVE / GOOGLE CSE (matn qidiruv) ─────────────────────────────────────
 
 interface SerperResult { title: string; link: string; snippet?: string; }
 
@@ -390,33 +394,9 @@ async function googleCseSearch(query: string): Promise<SerperResult[]> {
 }
 
 /**
- * Qidiruv: Serper (asosiy) → Brave (fallback 1) → Google CSE (fallback 2).
- * Serper kredit tugasa yoki key yo'q bo'lsa avtomatik keyingiga o'tadi.
+ * Veb qidiruv: Brave (asosiy) → Google CSE (fallback).
  */
-async function serperSearch(query: string, gl = 'uz', hl = 'uz'): Promise<SerperResult[]> {
-  if (SERPER_KEY) {
-    try {
-      const r = await axios.post('https://google.serper.dev/search',
-        { q: query, gl, hl, num: 10 },
-        { headers: { 'X-API-KEY': SERPER_KEY, 'Content-Type': 'application/json' }, timeout: TIMEOUT }
-      );
-      const results = r.data.organic || [];
-      console.log(`🔎 Serper: "${query.slice(0, 40)}" → ${results.length} natija`);
-      return results;
-    } catch (e) {
-      const status = (e as { response?: { status?: number } }).response?.status;
-      if (status === 400 || status === 402 || status === 429) {
-        console.warn(`⚠️ Serper ${status} kredit/limit — Brave ga o'tilmoqda`);
-        console.log(`🦁 Brave: "${query.slice(0, 40)}"`);
-        const brave = await braveSearch(query);
-        if (brave.length > 0) return brave;
-        console.log(`🔍 Google CSE: "${query.slice(0, 40)}"`);
-        return googleCseSearch(query);
-      }
-      return [];
-    }
-  }
-  // Serper key yo'q — Brave, so'ng Google CSE
+async function serperSearch(query: string, _gl = 'uz', _hl = 'uz'): Promise<SerperResult[]> {
   console.log(`🦁 Brave: "${query.slice(0, 40)}"`);
   const brave = await braveSearch(query);
   if (brave.length > 0) return brave;
@@ -895,13 +875,13 @@ function pushDistinct(candidates: MovieIdentified[], m: MovieIdentified | null |
  * Rasm bo'yicha film: faqat Gemini (multimodal) + Vision / Rekognition / tasdiq.
  * GEMINI_API_KEY majburiy.
  */
-export async function identifyMovie(base64: string, mimeType: string, textHint?: string | null): Promise<MovieIdentified | null> {
+export async function identifyMovie(base64: string, mimeType: string, textHint?: string | null): Promise<IdentifyMovieResult> {
   const withTimeout = <T>(p: Promise<T>, ms = 10000): Promise<T | null> =>
     Promise.race([p, new Promise<null>(res => setTimeout(() => res(null), ms))]).catch(() => null);
 
   if (!GEMINI_KEY) {
     console.warn('identifyMovie: GEMINI_API_KEY yo\'q — rasm bo\'yicha aniqlash o\'chirilgan');
-    return null;
+    return { ok: false, reason: 'no_candidates' };
   }
 
   const croppedBase64 = await cropFrame(base64);
@@ -971,18 +951,20 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
       confidence: faces.confidence ?? vision.confidence,
     };
     console.log('✅ faces+vision konsensus — Gemini verify o‘tkazilmaydi:', consensus.title);
-    return consensus;
+    return { ok: true, identified: consensus };
   }
 
   const MAX_VERIFY = 8;
   let lastAlternative: MovieIdentified | null = null;
+  let verifyRan = false;
 
   for (let i = 0; i < Math.min(ordered.length, MAX_VERIFY); i++) {
+    verifyRan = true;
     const cand = ordered[i];
     const verifyRes = await withTimeout(geminiVerify(croppedBase64, cand.title, cropMime));
     if (verifyRes?.match) {
       console.log('✅ Tasdiqlangan:', cand.title);
-      return cand;
+      return { ok: true, identified: cand };
     }
     // Verify false bo'lsa lekin Gemini aniq alternativ sarlavha bilsa — saqlab qo'yamiz
     if (verifyRes?.alternativeTitle && !lastAlternative) {
@@ -994,16 +976,21 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
   // Hech bir nomzod tasdiqlanmadi, lekin Gemini alternativ taklif bilsa —
   // uni ham verify dan o'tkazamiz (tasdiqsiz qaytarmaslik uchun)
   if (lastAlternative) {
+    verifyRan = true;
     const altVerify = await withTimeout(geminiVerify(croppedBase64, lastAlternative.title, cropMime));
     if (altVerify?.match) {
       console.log('✅ Alternativ sarlavha tasdiqlandi:', lastAlternative.title);
-      return lastAlternative;
+      return { ok: true, identified: lastAlternative };
     }
     console.log('⚠️ Alternativ sarlavha ham tasdiqlanmadi:', lastAlternative.title);
   }
 
+  if (!verifyRan) {
+    console.log('⚠️ Tasdiq uchun nomzod yo‘q');
+    return { ok: false, reason: 'no_candidates' };
+  }
   console.log('⚠️ Hech bir nomzod Gemini tasdiqidan o\'tmadi');
-  return null;
+  return { ok: false, reason: 'gemini_verify_failed' };
 }
 
 // ─── MATN ORQALI FILM QIDIRISH ────────────────────────────────────────────────
@@ -1114,10 +1101,10 @@ export async function identifyFromTextDetailed(query: string): Promise<IdentifyF
     return found({ title: 'WALL-E', type: 'movie' });
   }
 
-  // 2b. Serper — faqat so‘rov film sarlavhasiga o‘xshaganda (matn bilan titlesMatch)
+  // 2b. Veb qidiruv (Brave) — faqat so‘rov film sarlavhasiga o‘xshaganda (matn bilan titlesMatch)
   const serper = await identifyBySerper(query);
   if (serper) {
-    console.log(`🔍 Text identification (Serper): "${query}" -> Found "${serper.title}"`);
+    console.log(`🔍 Text identification (web): "${query}" -> Found "${serper.title}"`);
     return found(serper);
   }
 
@@ -1141,7 +1128,7 @@ export async function identifyFromTextDetailed(query: string): Promise<IdentifyF
     }
   }
 
-  // 3. Serper konteksti + LLM — uzun tavsiflar
+  // 3. Veb qidiruv konteksti + LLM — uzun tavsiflar
   if (!GEMINI_KEY) return notFound();
 
   const contextResults = GEMINI_GROUNDING_TEXT
@@ -1222,7 +1209,7 @@ Respond ONLY with this JSON structure:
       }
 
       if (!verifiedTitle) {
-        console.log(`🔍 LLM title verification (Serper): "${p.title}"`);
+        console.log(`🔍 LLM title verification (web): "${p.title}"`);
         const serperVerify = await identifyBySerper(p.title);
         if (serperVerify) {
           verifiedTitle = serperVerify.title;
