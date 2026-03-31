@@ -30,36 +30,43 @@ const baseDetails = (): MovieDetails => ({
 });
 
 describe('buildMovieResultCaption', () => {
-  it('captionda Tomosha havolalari bloki yo‘q, forward eslatmasi bor', () => {
+  it('captionda Tomosha havolalari va ortiqcha eslatmalar yo‘q', () => {
     const c = buildMovieResultCaption(baseDetails(), {});
     expect(c).not.toMatch(/Tomosha havolalari/);
-    expect(c).toMatch(/Poster va barcha havolalar: chatdagi yuqoridagi xabarni forward qiling/);
-    expect(c).toMatch(/Ulashish/);
+    expect(c).not.toMatch(/Poster va barcha havolalar/);
+    expect(c).not.toMatch(/Ulashish/);
+    expect(c).toMatch(/Silicon Valley/);
   });
 });
 
 describe('buildTelegramShareUrl', () => {
-  it('har doim SHARE_FORWARD_HINT qatorini o‘z ichiga oladi', () => {
+  it('qisqa matn: sarlavha, uzun havolalar ro‘yxati yo‘q', () => {
     const u = buildTelegramShareUrl(baseDetails(), 'kinova_bot');
     expect(u).not.toBeNull();
     const m = u!.match(/text=([^&]+)/);
     expect(m).not.toBeNull();
     const text = decodeURIComponent(m![1]);
-    expect(text).toContain('Poster va barcha havolalar: chatdagi yuqoridagi xabarni forward qiling.');
+    expect(text).toMatch(/🎬 Silicon Valley/);
+    expect(text).not.toMatch(/Tomosha havolalari/);
+    expect(text).not.toMatch(/Poster va barcha havolalar/);
+    expect(text).not.toMatch(/https:\/\/uzbeklar/);
+    expect(text).not.toMatch(/https:\/\/www\.google\.com\/search/);
   });
 
-  it('juda uzun sarlavhada ham minimal fallbackda eslatma qoladi', () => {
+  it('juda uzun sarlavhada ham URL chegarada ishlaydi', () => {
     const d = baseDetails();
     d.title = 'A'.repeat(500);
     d.originalTitle = d.title;
     const u = buildTelegramShareUrl(d, 'kinova_bot');
     expect(u).not.toBeNull();
+    expect(u!.length).toBeLessThanOrEqual(2048);
     const m = u!.match(/text=([^&]+)/);
     const text = decodeURIComponent(m![1]);
-    expect(text).toContain('Poster va barcha havolalar: chatdagi yuqoridagi xabarni forward qiling.');
+    expect(text.startsWith('🎬 ')).toBe(true);
+    expect(text).not.toMatch(/https:\/\//);
   });
 
-  it('butun URL 2048 dan oshmasin', () => {
+  it('butun inline keyboard URL 2048 dan oshmasin', () => {
     const d = baseDetails();
     d.watchLinks = Array.from({ length: 20 }, (_, i) => ({
       title: `t${i}`,

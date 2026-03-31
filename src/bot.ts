@@ -171,7 +171,7 @@ async function bootstrap(): Promise<void> {
         `<b>Natijada:</b>\n` +
         `🎬 Film nomi (o'zbekcha)\n` +
         `📖 Qisqacha mazmun\n` +
-        `▶️ Tomosha havolalari (tugmalar) · 📩 Ulashish (matn; rasm uchun xabarni forward qiling)\n\n` +
+        `▶️ Tomosha havolalari (tugmalar) · 📩 Ulashish (qisqa matn + bot havolasi)\n\n` +
         `<b>Fikr:</b> <b>✅ Ha, shu film</b> / <b>❌ Yo'q, bu emas</b>. ` +
         `<code>/feedback</code> / <b>Yo‘q</b> — keyingi xabar qisqa shikoyat (qidiruv emas).`,
       { parse_mode: 'HTML' }

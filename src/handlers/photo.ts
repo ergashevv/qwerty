@@ -287,17 +287,9 @@ const TELEGRAM_CAPTION_MAX = 1024;
 /** Inline tugma `url` — Telegram cheklovi. */
 const INLINE_KEYBOARD_URL_MAX = 2048;
 
-/** Tomosha havolalari captionda takrorlanmaydi (tugmalar bor); forward / Ulashish uchun eslatma. */
-const CAPTION_FORWARD_HINT_HTML =
-  '<i>Poster va barcha havolalar: chatdagi yuqoridagi xabarni forward qiling.</i>\n' +
-  '<i>«Ulashish» matn va havolani yuboradi (rasm yo‘q); rasm uchun shu xabarni forward qiling.</i>';
-
-/** `t.me/share/url` matnida — minimal fallbackda ham qolishi kerak. */
-const SHARE_FORWARD_HINT = 'Poster va barcha havolalar: chatdagi yuqoridagi xabarni forward qiling.';
-
 /**
- * Telegramning o‘z ulashish oynasi (`t.me/share/url`) — yangi bot xabari emas.
- * Rasm faqat chatdagi asosiy xabarni forward qilganda ketadi; bu yerda matn + havolalar.
+ * Telegram `t.me/share/url` — faqat qisqa matn + bot havolasi (preview).
+ * Uzun tomosha URL larini bu yerga qo‘ymaymiz (chalkash va tushunarsiz).
  */
 export function buildTelegramShareUrl(details: MovieDetails, botUsername: string): string | null {
   const u = botUsername.replace(/^@/, '').trim();
@@ -305,57 +297,27 @@ export function buildTelegramShareUrl(details: MovieDetails, botUsername: string
   const botLink = `https://t.me/${u}`;
   const mainTitle = details.title || details.originalTitle || details.uzTitle || 'Film';
 
-  const buildText = (linkCount: number, includeUz: boolean, includeImdbGoogle: boolean) => {
-    const lines: string[] = [];
-    lines.push(`🎬 ${mainTitle}`);
-    if (includeUz && details.uzTitle && details.uzTitle !== mainTitle) {
-      lines.push(`📽 ${details.uzTitle}`);
+  const shareTextVariants = (): string[] => {
+    const out: string[] = [];
+    const head = `🎬 ${mainTitle}`;
+    if (details.uzTitle && details.uzTitle !== mainTitle) {
+      out.push(`${head}\n📽 ${details.uzTitle}`);
     }
-    lines.push('');
-    const wl = details.watchLinks.slice(0, linkCount);
-    if (wl.length > 0) {
-      lines.push('Tomosha havolalari:');
-      for (const w of wl) {
-        lines.push(`• ${w.source}: ${w.link}`);
-      }
-    }
-    if (includeImdbGoogle) {
-      if (details.imdbUrl) lines.push(`• IMDb: ${details.imdbUrl}`);
-      const q =
-        (details.originalTitle && details.originalTitle.trim()) ||
-        details.title ||
-        details.uzTitle;
-      const gUrl = `https://www.google.com/search?q=${encodeURIComponent(q + ' uzbek tilida')}`;
-      lines.push(`• Google: ${gUrl}`);
-    }
-    lines.push('');
-    lines.push(SHARE_FORWARD_HINT);
-    return lines.join('\n');
+    out.push(head);
+    return out;
   };
 
-  const tryPack = (linkCount: number, includeUz: boolean, includeIg: boolean) => {
-    const text = buildText(linkCount, includeUz, includeIg);
+  for (const text of shareTextVariants()) {
     const full = `https://t.me/share/url?url=${encodeURIComponent(botLink)}&text=${encodeURIComponent(text)}`;
-    return full.length <= INLINE_KEYBOARD_URL_MAX ? full : null;
-  };
-
-  for (const linkCount of [4, 3, 2, 1, 0]) {
-    for (const includeUz of [true, false]) {
-      for (const includeIg of [true, false]) {
-        const r = tryPack(linkCount, includeUz, includeIg);
-        if (r) return r;
-      }
-    }
+    if (full.length <= INLINE_KEYBOARD_URL_MAX) return full;
   }
 
-  for (let maxTitle = 200; maxTitle >= 20; maxTitle -= 20) {
-    const minimal = `🎬 ${mainTitle.slice(0, maxTitle)}\n\n${SHARE_FORWARD_HINT}`;
-    const fallback = `https://t.me/share/url?url=${encodeURIComponent(botLink)}&text=${encodeURIComponent(minimal)}`;
-    if (fallback.length <= INLINE_KEYBOARD_URL_MAX) return fallback;
+  for (let max = 200; max >= 10; max -= 10) {
+    const text = `🎬 ${mainTitle.slice(0, max)}`;
+    const full = `https://t.me/share/url?url=${encodeURIComponent(botLink)}&text=${encodeURIComponent(text)}`;
+    if (full.length <= INLINE_KEYBOARD_URL_MAX) return full;
   }
-
-  const hintOnly = `https://t.me/share/url?url=${encodeURIComponent(botLink)}&text=${encodeURIComponent(SHARE_FORWARD_HINT)}`;
-  return hintOnly.length <= INLINE_KEYBOARD_URL_MAX ? hintOnly : null;
+  return null;
 }
 
 export function buildMovieResultCaption(
@@ -371,7 +333,6 @@ export function buildMovieResultCaption(
   const ratingLine = details.rating !== 'N/A' ? ` | ⭐ ${details.rating}/10` : '';
   const confidenceLine =
     opts?.confidence === 'medium' ? `\n\n<i>🤖 AI taklifi — noto'g'ri bo'lishi mumkin.</i>` : '';
-  const forwardHint = `\n\n${CAPTION_FORWARD_HINT_HTML}`;
 
   const buildWithPlotLimit = (plotLimit: number) => {
     const plotPart =
@@ -384,7 +345,6 @@ export function buildMovieResultCaption(
       ``,
       `📖 ${escHtml(plotPart)}`,
       confidenceLine,
-      forwardHint,
     ]
       .filter(Boolean)
       .join('\n');
