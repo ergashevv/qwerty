@@ -284,28 +284,65 @@ export async function handlePhoto(ctx: Context): Promise<void> {
 }
 
 const TELEGRAM_CAPTION_MAX = 1024;
+/** Inline tugma `url` — Telegram cheklovi. */
+const INLINE_KEYBOARD_URL_MAX = 2048;
 
 /**
- * Forward qilganda inline tugmalar o‘tmaydi — havolalar caption ichida ham beriladi.
- * `keyboard_keep_json` dan qayta tiklash uchun (Ulashish karti).
+ * Telegramning o‘z ulashish oynasi (`t.me/share/url`) — yangi bot xabari emas.
+ * Poster chatdagi yuqoridagi xabarda; bu yerda matn + bot havolasi.
  */
-export function buildWatchLinksCaptionFromKeyboardJson(keyboardJson: string | null): string {
-  if (!keyboardJson?.trim()) return '';
-  try {
-    const o = JSON.parse(keyboardJson) as { inline_keyboard?: { url?: string; text?: string }[][] };
+export function buildTelegramShareUrl(details: MovieDetails, botUsername: string): string | null {
+  const u = botUsername.replace(/^@/, '').trim();
+  if (!u) return null;
+  const botLink = `https://t.me/${u}`;
+  const mainTitle = details.title || details.originalTitle || details.uzTitle || 'Film';
+
+  const buildText = (linkCount: number, includeUz: boolean, includeImdbGoogle: boolean) => {
     const lines: string[] = [];
-    for (const row of o.inline_keyboard ?? []) {
-      for (const btn of row) {
-        if (btn.url && btn.text) {
-          lines.push(`• <a href="${escHtml(btn.url)}">${escHtml(btn.text)}</a>`);
-        }
+    lines.push(`🎬 ${mainTitle}`);
+    if (includeUz && details.uzTitle && details.uzTitle !== mainTitle) {
+      lines.push(`📽 ${details.uzTitle}`);
+    }
+    lines.push('');
+    const wl = details.watchLinks.slice(0, linkCount);
+    if (wl.length > 0) {
+      lines.push('Tomosha havolalari:');
+      for (const w of wl) {
+        lines.push(`• ${w.source}: ${w.link}`);
       }
     }
-    if (lines.length === 0) return '';
-    return `\n\n🔗 <b>Tomosha havolalari</b>\n` + lines.join('\n');
-  } catch {
-    return '';
+    if (includeImdbGoogle) {
+      if (details.imdbUrl) lines.push(`• IMDb: ${details.imdbUrl}`);
+      const q =
+        (details.originalTitle && details.originalTitle.trim()) ||
+        details.title ||
+        details.uzTitle;
+      const gUrl = `https://www.google.com/search?q=${encodeURIComponent(q + ' uzbek tilida')}`;
+      lines.push(`• Google: ${gUrl}`);
+    }
+    lines.push('');
+    lines.push(`Poster va barcha havolalar: chatdagi yuqoridagi xabarni forward qiling.`);
+    return lines.join('\n');
+  };
+
+  const tryPack = (linkCount: number, includeUz: boolean, includeIg: boolean) => {
+    const text = buildText(linkCount, includeUz, includeIg);
+    const full = `https://t.me/share/url?url=${encodeURIComponent(botLink)}&text=${encodeURIComponent(text)}`;
+    return full.length <= INLINE_KEYBOARD_URL_MAX ? full : null;
+  };
+
+  for (const linkCount of [4, 3, 2, 1, 0]) {
+    for (const includeUz of [true, false]) {
+      for (const includeIg of [true, false]) {
+        const r = tryPack(linkCount, includeUz, includeIg);
+        if (r) return r;
+      }
+    }
   }
+
+  const minimal = `🎬 ${mainTitle.slice(0, 200)}\n\nKinova: ${botLink}`;
+  const fallback = `https://t.me/share/url?url=${encodeURIComponent(botLink)}&text=${encodeURIComponent(minimal)}`;
+  return fallback.length <= INLINE_KEYBOARD_URL_MAX ? fallback : null;
 }
 
 /** Asosiy natija caption — `MovieDetails` dan (inline tugmalar bilan bir xil havolalar). */
@@ -408,7 +445,11 @@ export async function sendMovieResult(
       { text: '✅ Ha, shu film', callback_data: `fb:${pTok}:y` },
       { text: "❌ Yo'q, bu emas", callback_data: `fb:${pTok}:n` },
     ]);
-    watchButtons.push([{ text: '📤 Ulashish karti', callback_data: `shc:${pTok}` }]);
+    const botUser = ctx.me?.username ?? process.env.BOT_USERNAME?.replace(/^@/, '')?.trim();
+    const shareUrl = botUser ? buildTelegramShareUrl(details, botUser) : null;
+    if (shareUrl) {
+      watchButtons.push([{ text: '📩 Ulashish', url: shareUrl }]);
+    }
   }
 
   const replyMarkup = { inline_keyboard: watchButtons };

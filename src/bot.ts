@@ -13,7 +13,6 @@ import {
 } from './db';
 import { getPostgresPool, initPostgresSchema, pingPostgres, runAnalyticsRetention } from './db/postgres';
 import { handleIdentificationFeedback } from './handlers/feedback';
-import { handleShareCard } from './handlers/shareCard';
 import { feedbackModeReplyMarkup, handleFeedbackModeBack } from './handlers/feedbackModeBack';
 import { handleDonateCallback } from './handlers/donatePrompt';
 import {
@@ -112,10 +111,6 @@ async function bootstrap(): Promise<void> {
     await handleIdentificationFeedback(ctx);
   });
 
-  bot.callbackQuery(/^shc:/, async (ctx) => {
-    await handleShareCard(ctx);
-  });
-
   bot.callbackQuery(/^svy:/, async (ctx) => {
     await handleSurveyCallback(ctx);
   });
@@ -176,7 +171,7 @@ async function bootstrap(): Promise<void> {
         `<b>Natijada:</b>\n` +
         `🎬 Film nomi (o'zbekcha)\n` +
         `📖 Qisqacha mazmun\n` +
-        `▶️ Tomosha havolalari · 📤 Story uchun ulashish karti\n\n` +
+        `▶️ Tomosha havolalari · 📩 Ulashish (Telegram ulashish oynasi; poster uchun xabarni forward qiling)\n\n` +
         `<b>Fikr:</b> <b>✅ Ha, shu film</b> / <b>❌ Yo'q, bu emas</b>. ` +
         `<code>/feedback</code> / <b>Yo‘q</b> — keyingi xabar qisqa shikoyat (qidiruv emas).`,
       { parse_mode: 'HTML' }
