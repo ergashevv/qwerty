@@ -390,6 +390,92 @@ describe('To\'liq pipeline: identifyMovie — haqiqiy rasm bilan', () => {
   });
 });
 
+// ─── 6c. DASHBOARD: "eng ko'p xato" statistikasi (Gemini / identifyMovie stress) ─
+//
+// analytics_events bo'yicha ko'p "xato" feedback — odatda **Telegram/Instagram kadri**, TMDB
+// posteri emas. Shuning uchun bu test ikkilamchi: agar posterlar bilan hammasi yashil bo'lsa,
+// asosiy muammo Gemini "o'zi" emas, balki **kadrsifati / watermark / noto'g'ri nomzod tartibi**
+// bo'lishi mumkin. Agar posterda ham adashsa — model yoki verify zaif.
+//
+// Keyingi qadam (qo'lda): feedbackdan "xato" deb belgilangan xabarning rasm faylini saqlab,
+// shu faylni identifyMovie ga berish (alohida skript yoki vaqtinchalik handler).
+//
+// Qat'iy rejim: GEMINI_REGRESSION_STRICT=1 npm run test:integration
+//   — barcha posterlar kutilgan nomga mos kelishi kerak (aks holda test yashil qoladi).
+
+describe('Dashboard "eng ko\'p xato" — TMDB poster + identifyMovie (Gemini stress)', () => {
+  /** `insights` / topWrong bilan mos: photo kanalida ko'p "xato" feedback (TMDB id) */
+  const STAT_TOP_WRONG_TV: Array<{ tmdbId: number; expectTitle: string; note: string }> = [
+    { tmdbId: 108978, expectTitle: 'Reacher', note: 'photo/reels feedback' },
+    { tmdbId: 66732, expectTitle: 'Stranger Things', note: 'photo feedback' },
+    { tmdbId: 86831, expectTitle: 'Love, Death & Robots', note: 'photo feedback' },
+  ];
+
+  async function tmdbPosterUrl(tmdbId: number, media: 'tv' | 'movie'): Promise<string | null> {
+    const key = process.env.TMDB_API_KEY;
+    if (!key) return null;
+    const r = await axios.get(`https://api.themoviedb.org/3/${media}/${tmdbId}`, {
+      params: { api_key: key },
+      timeout: 20000,
+    });
+    const p = r.data?.poster_path as string | null;
+    if (!p) return null;
+    return `https://image.tmdb.org/t/p/w500${p}`;
+  }
+
+  test('Bitta test: yuqoridagi 3 ta serial posteri — identifyMovie ketma-ket (log + ixtiyoriy STRICT)', async () => {
+    const { identifyMovie, titlesMatch } = await import('../services/movieService');
+    const mismatches: string[] = [];
+
+    for (const row of STAT_TOP_WRONG_TV) {
+      const url = await tmdbPosterUrl(row.tmdbId, 'tv');
+      if (!url) {
+        console.log(`⚠️ ${row.expectTitle}: TMDB poster yo'q (id=${row.tmdbId})`);
+        mismatches.push(`${row.expectTitle}: no poster`);
+        continue;
+      }
+
+      console.log(`\n── Dashboard regression: ${row.expectTitle} (${row.note}) ──`);
+      console.log(`   TMDB poster: ${url}`);
+
+      const base64 = await downloadImageAsBase64(url);
+      const result = await identifyMovie(base64, 'image/jpeg');
+
+      if (!result.ok) {
+        console.log(`   ❌ identifyMovie ok=false — ${result.reason}`);
+        mismatches.push(`${row.expectTitle}: ${result.reason}`);
+        continue;
+      }
+
+      const got = result.identified.title;
+      if (titlesMatch(got, row.expectTitle)) {
+        console.log(`   ✅ Mos: "${got}" (${result.identified.type}, ${result.identified.confidence})`);
+      } else {
+        console.log(`   ⚠️ MOS KELMADI: bot="${got}" · kutilgan="${row.expectTitle}"`);
+        mismatches.push(`${row.expectTitle}: got "${got}"`);
+      }
+    }
+
+    console.log(
+      `\n📊 Regression xulosa: ${mismatches.length} / ${STAT_TOP_WRONG_TV.length} mos kelmaydi ` +
+        `(STRICT yo'q — test yashil; qat'iy tekshiruv: GEMINI_REGRESSION_STRICT=1)`
+    );
+    if (mismatches.length) {
+      console.log('   Sabab: pipeline posterda yengilmasdi — model yoki verify tekshirilsin.');
+    } else {
+      console.log(
+        '   ℹ️ Barcha posterlar mos keldi — dashboarddagi "xato" ko\'p bo\'lsa, sabab odatda ' +
+          '**foydalanuvchi kadri** (screenshot) bilan poster farqi; keyingi repro: xato feedback ' +
+          'rasmini saqlab shu test o\'rniga shu faylni ishlating.'
+      );
+    }
+
+    if (process.env.GEMINI_REGRESSION_STRICT === '1') {
+      expect(mismatches).toEqual([]);
+    }
+  });
+});
+
 // ─── 6b. VISION WATERMARK VA SKIP TEKSHIRUVI ─────────────────────────────────
 
 describe('Vision — watermark va noise filtering', () => {
