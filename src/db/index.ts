@@ -122,6 +122,27 @@ export async function canUserSendPhoto(
 
 export type SearchRequestSource = 'text' | 'photo' | 'reels';
 
+/** Har so‘rovda DELETE qilmaslik — soatiga ~1 marta eski qatorlarni tozalash */
+let lastRequestTablesPruneAt = 0;
+const REQUEST_TABLES_PRUNE_MS = 60 * 60 * 1000;
+
+async function maybePruneRequestTables(): Promise<void> {
+  const n = Date.now();
+  if (lastRequestTablesPruneAt !== 0 && n - lastRequestTablesPruneAt < REQUEST_TABLES_PRUNE_MS) return;
+  lastRequestTablesPruneAt = n;
+  const now = Math.floor(n / 1000);
+  const pool = getPostgresPool();
+  try {
+    await Promise.all([
+      pool.query(`DELETE FROM search_requests WHERE created_at < $1`, [now - 120 * 24 * 60 * 60]),
+      pool.query(`DELETE FROM photo_requests WHERE created_at < $1`, [now - 4 * 24 * 60 * 60]),
+      pool.query(`DELETE FROM reels_requests WHERE created_at < $1`, [now - 8 * 24 * 60 * 60]),
+    ]);
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Har bir qidiruv urinishi (matn / screenshot / reels) — dashboard statistikasi */
 export async function recordSearchRequest(
   telegramId: number,
@@ -138,16 +159,13 @@ export async function recordSearchRequest(
     `INSERT INTO search_requests (telegram_id, source, created_at, query_text) VALUES ($1, $2, $3, $4)`,
     [telegramId, source, now, q]
   );
-  const old = now - 120 * 24 * 60 * 60;
-  await pool.query(`DELETE FROM search_requests WHERE created_at < $1`, [old]);
+  await maybePruneRequestTables();
 }
 
 export async function recordPhotoRequest(telegramId: number): Promise<void> {
   const pool = getPostgresPool();
   const now = Math.floor(Date.now() / 1000);
   await pool.query(`INSERT INTO photo_requests (telegram_id, created_at) VALUES ($1, $2)`, [telegramId, now]);
-  const old = now - 4 * 24 * 60 * 60;
-  await pool.query(`DELETE FROM photo_requests WHERE created_at < $1`, [old]);
   await recordSearchRequest(telegramId, 'photo');
 }
 
@@ -167,8 +185,7 @@ export async function recordReelsRequest(telegramId: number): Promise<void> {
   const pool = getPostgresPool();
   const now = Math.floor(Date.now() / 1000);
   await pool.query(`INSERT INTO reels_requests (telegram_id, created_at) VALUES ($1, $2)`, [telegramId, now]);
-  const old = now - 8 * 24 * 60 * 60;
-  await pool.query(`DELETE FROM reels_requests WHERE created_at < $1`, [old]);
+  await maybePruneRequestTables();
 }
 
 /**
@@ -193,8 +210,7 @@ export async function tryReserveReelsSlot(telegramId: number): Promise<boolean> 
     }
     await client.query(`INSERT INTO reels_requests (telegram_id, created_at) VALUES ($1, $2)`, [telegramId, now]);
     await client.query('COMMIT');
-    const old = now - 8 * 24 * 60 * 60;
-    await getPostgresPool().query(`DELETE FROM reels_requests WHERE created_at < $1`, [old]);
+    await maybePruneRequestTables();
     return true;
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});

@@ -293,6 +293,15 @@ describe('Text handler — darhol "Qidirilmoqda..." xabari', () => {
       getSurveyProblemPending: jest.fn(async () => null),
       completeSurveyProblemText: jest.fn(async () => true),
     }));
+    jest.mock('../db/postgres', () => ({
+      insertAnalyticsEvent: jest.fn(async () => {}),
+    }));
+    jest.mock('../db/feedbackProblemReport', () => ({
+      getProblemReportPending: jest.fn(async () => null),
+      clearProblemReportPending: jest.fn(async () => {}),
+      insertIdentificationProblemReport: jest.fn(async () => 1),
+      resetFeedbackNoStreak: jest.fn(async () => {}),
+    }));
 
     const replyMock = jest.fn(async () => {
       callOrder.push('reply:Qidirilmoqda');

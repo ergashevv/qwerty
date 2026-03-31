@@ -21,6 +21,7 @@ import {
   runSurveyDeleteCampaign,
 } from './handlers/surveyBroadcast';
 import { isAdminTelegram } from './utils/isAdmin';
+import { safeReply } from './utils/safeTelegram';
 
 const _botToken = process.env.BOT_TOKEN;
 if (!_botToken) {
@@ -151,7 +152,13 @@ async function bootstrap(): Promise<void> {
 
   bot.command('stats', async (ctx) => {
     const adminId = process.env.ADMIN_TELEGRAM_ID?.trim();
-    if (adminId && !isAdminTelegram(ctx.from?.id)) return;
+    if (adminId && !isAdminTelegram(ctx.from?.id)) {
+      await safeReply(
+        ctx,
+        '⛔ /stats faqat admin uchun.\n\nYordam: /help yoki /start'
+      );
+      return;
+    }
 
     try {
       const [aud, fb, blockedRes] = await Promise.all([
@@ -177,7 +184,7 @@ async function bootstrap(): Promise<void> {
         { parse_mode: 'HTML' }
       );
     } catch {
-      await ctx.reply('Statistika olishda xatolik.');
+      await safeReply(ctx, 'Statistika olishda xatolik. Keyinroq qayta urinib ko‘ring.');
     }
   });
 
@@ -223,12 +230,24 @@ async function bootstrap(): Promise<void> {
     } else {
       console.error("Noma'lum xato:", err.error);
     }
-    /** Callback allaqachon yopilmagan bo'lsa yoki "query is too old" — qo'shimcha xabar spam qilmaymiz */
     const g = err.error instanceof GrammyError ? err.error.description : '';
     if (g.includes('query is too old') || g.includes('query ID is invalid')) return;
-    if (ctx.callbackQuery) return;
+
+    const fallback =
+      "⚠️ Vaqtincha xatolik. Birozdan keyin qayta urinib ko'ring.";
+    if (ctx.callbackQuery) {
+      void ctx
+        .answerCallbackQuery({
+          text: 'Vaqtincha xatolik. Keyinroq qayta urinib ko‘ring.',
+          show_alert: true,
+        })
+        .catch(() => {
+          if (ctx.chat?.id) void safeReply(ctx, fallback);
+        });
+      return;
+    }
     if (ctx.message) {
-      void ctx.reply("⚠️ Vaqtincha xatolik. Birozdan keyin qayta urinib ko'ring.").catch(() => {});
+      void safeReply(ctx, fallback);
     }
   });
 

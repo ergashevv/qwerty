@@ -17,6 +17,7 @@ import { enqueueReelsJob } from '../services/reelsQueue';
 import { identifyMovieFromReelVideo } from '../services/reelsPipeline';
 import { REELS_LIMIT_PER_WINDOW, REELS_WINDOW_SECONDS } from '../config/limits';
 import { STATUS_DETAILS_LINES, STATUS_IDENTIFY_LINES, withRotatingStatus } from './rotatingStatus';
+import { safeEditOrNotify } from '../utils/safeTelegram';
 
 export async function handleInstagramReelUrl(ctx: Context, reelUrl: string): Promise<void> {
   const userId = ctx.from?.id;
@@ -34,14 +35,15 @@ export async function handleInstagramReelUrl(ctx: Context, reelUrl: string): Pro
     return;
   }
 
-  await recordSearchRequest(userId, 'reels');
-
-  const processing = await ctx.reply('🔍 Reels tekshirilmoqda...');
   const chatId = ctx.chat!.id;
-  const msgId = processing.message_id;
-  void ctx.api.sendChatAction(chatId, 'typing');
-
+  let processing: { message_id: number } | undefined;
   try {
+    await recordSearchRequest(userId, 'reels');
+
+    processing = await ctx.reply('🔍 Reels tekshirilmoqda...');
+    const msgId = processing.message_id;
+    void ctx.api.sendChatAction(chatId, 'typing');
+
     await ctx.api.editMessageText(
       chatId,
       msgId,
@@ -144,6 +146,6 @@ export async function handleInstagramReelUrl(ctx: Context, reelUrl: string): Pro
       err instanceof Error && err.message === 'process_timeout'
         ? '❌ Video yoki kadr qayta ishlash vaqti tugadi. Keyinroq qayta urinib ko‘ring.'
         : '❌ Reels ni qayta ishlab bo‘lmadi (yuklash yoki Instagram cheklovi). Screenshot yoki matn bilan urinib ko‘ring.';
-    await ctx.api.editMessageText(chatId, msgId, msg).catch(() => {});
+    await safeEditOrNotify(ctx, chatId, processing?.message_id, msg);
   }
 }

@@ -3,8 +3,15 @@ import type { InlineKeyboardMarkup } from 'grammy/types';
 import { insertAnalyticsEvent } from '../db/postgres';
 import { insertFilmPhotoEvidence } from '../db';
 import { consumePendingFeedback } from '../db/feedbackPending';
+import {
+  clearProblemReportPending,
+  incrementFeedbackNoStreak,
+  resetFeedbackNoStreak,
+  setProblemReportPending,
+} from '../db/feedbackProblemReport';
 import { tryBuildFeedbackThumbB64 } from '../services/feedbackThumb';
 import { maybeDonateAfterFeedbackYes } from './donatePrompt';
+import { safeReply } from '../utils/safeTelegram';
 
 const PREFIX = 'fb:';
 
@@ -44,6 +51,10 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
     row = await consumePendingFeedback(keyPart, uid);
   } catch (e) {
     console.error('consumePendingFeedback:', (e as Error).message);
+    await safeReply(
+      ctx,
+      '⚠️ Fikrni saqlab bo‘lmadi (server band yoki vaqtinchalik xato). Keyinroq qayta urinib ko‘ring.'
+    );
     return;
   }
 
@@ -90,6 +101,8 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
   });
 
   if (correct) {
+    await resetFeedbackNoStreak(uid);
+    await clearProblemReportPending(uid);
     if (
       row.source === 'photo' &&
       row.photo_file_id &&
@@ -106,14 +119,44 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
     }
     await maybeDonateAfterFeedbackYes(ctx).catch(() => {});
   } else {
-    const sourceHint = row.source === 'photo'
-      ? '📸 Boshqa kadr yoki aniqroq sahna bilan sinab ko\'ring\n'
-      : '';
-    await ctx.reply(
-      sourceHint +
-      '🎬 Qaysi film ekanini bilsangiz — <b>nomini yozing</b>, darhol topib beraman!\n' +
-      '✍️ Yoki filmni so\'zlar bilan qisqacha tasvirlab yozing.',
-      { parse_mode: 'HTML' }
-    ).catch(() => {});
+    const streak = await incrementFeedbackNoStreak(uid);
+    if (streak === 1) {
+      const sourceHint =
+        row.source === 'photo'
+          ? '📸 Boshqa kadr yoki aniqroq sahna bilan sinab ko‘ring\n'
+          : '';
+      await safeReply(
+        ctx,
+        sourceHint +
+          '🎬 Qaysi film ekanini bilsangiz — <b>nomini yozing</b>, darhol topib beraman!\n' +
+          '✍️ Yoki filmni so‘zlar bilan qisqacha tasvirlab yozing.',
+        { parse_mode: 'HTML' }
+      );
+      return;
+    }
+
+    await setProblemReportPending(uid, {
+      predictedTitle: row.predicted_title,
+      predictedUzTitle: row.predicted_uz_title,
+      source: row.source,
+    });
+
+    if (streak === 2) {
+      await safeReply(
+        ctx,
+        '💬 <b>Bizga yordam bering</b>\n\n' +
+          'Ikki marta ketma-ket noto‘g‘ri topilganga o‘xshaydi. Iltimos, qisqa yozing:\n' +
+          '• nimani qanday noto‘g‘ri deb hisoblaysiz\n' +
+          '• qanday yaxshiroq bo‘lishini xohlaysiz\n\n' +
+          'Keyingi <b>bitta</b> xabaringizni shu yerga yuboring — u avtomatik qabul qilinadi.',
+        { parse_mode: 'HTML' }
+      );
+    } else {
+      await safeReply(
+        ctx,
+        '📝 Muammo haqidagi matningizni hali yozmadingiz. Iltimos, bitta xabar qilib yuboring — yoki yangi urinish uchun boshqa kadr yoki film nomini yuboring.',
+        { parse_mode: 'HTML' }
+      );
+    }
   }
 }

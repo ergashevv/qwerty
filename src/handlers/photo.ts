@@ -33,6 +33,7 @@ import {
   withRotatingStatus,
 } from './rotatingStatus';
 import { maybeDonateAfterSuccess } from './donatePrompt';
+import { safeEditOrNotify } from '../utils/safeTelegram';
 
 export async function handlePhoto(ctx: Context): Promise<void> {
   const userId  = ctx.from?.id;
@@ -41,45 +42,46 @@ export async function handlePhoto(ctx: Context): Promise<void> {
 
   if (!userId) return;
 
-  // Foydalanuvchiga darhol javob ko'rsatish — DB operatsiyalarini kutmasdan
-  const processing = await ctx.reply('🔍 Qidirilmoqda...');
-  void ctx.api.sendChatAction(ctx.chat!.id, 'typing');
-
-  await upsertUser(userId, username, firstName);
-  await recordUserActivityDay(userId);
-
-  const photoGate = await canUserSendPhoto(userId);
-  if (!photoGate.ok) {
-    if (photoGate.reason === 'burst') {
-      const m = Math.round(PHOTO_BURST_WINDOW_SECONDS / 60);
-      await ctx.api.editMessageText(
-        ctx.chat!.id,
-        processing.message_id,
-        `⏳ Juda tez-tez rasm yuboryapsiz.\n\n` +
-          `Bitta filmni topish uchun 3–4 ta kadr yuborishingiz mumkin — ` +
-          `lekin ${m} daqiqada maksimal <b>${PHOTO_BURST_LIMIT}</b> ta rasm.\n` +
-          `Biroz kutib, yana urinib ko'ring.`,
-        { parse_mode: 'HTML' }
-      );
-    } else {
-      await ctx.api.editMessageText(
-        ctx.chat!.id,
-        processing.message_id,
-        `⚠️ Kunlik rasm limiti tugadi (<b>${PHOTO_DAILY_LIMIT}</b> ta / kun).\n` +
-          `Ertaga yana foydalanishingiz mumkin.`,
-        { parse_mode: 'HTML' }
-      );
-    }
-    return;
-  }
-
-  await recordPhotoRequest(userId);
-
+  const chatId = ctx.chat!.id;
+  let processing: { message_id: number } | undefined;
   try {
+    processing = await ctx.reply('🔍 Qidirilmoqda...');
+    void ctx.api.sendChatAction(chatId, 'typing');
+
+    await upsertUser(userId, username, firstName);
+    await recordUserActivityDay(userId);
+
+    const photoGate = await canUserSendPhoto(userId);
+    if (!photoGate.ok) {
+      if (photoGate.reason === 'burst') {
+        const m = Math.round(PHOTO_BURST_WINDOW_SECONDS / 60);
+        await ctx.api.editMessageText(
+          chatId,
+          processing.message_id,
+          `⏳ Juda tez-tez rasm yuboryapsiz.\n\n` +
+            `Bitta filmni topish uchun 3–4 ta kadr yuborishingiz mumkin — ` +
+            `lekin ${m} daqiqada maksimal <b>${PHOTO_BURST_LIMIT}</b> ta rasm.\n` +
+            `Biroz kutib, yana urinib ko'ring.`,
+          { parse_mode: 'HTML' }
+        );
+      } else {
+        await ctx.api.editMessageText(
+          chatId,
+          processing.message_id,
+          `⚠️ Kunlik rasm limiti tugadi (<b>${PHOTO_DAILY_LIMIT}</b> ta / kun).\n` +
+            `Ertaga yana foydalanishingiz mumkin.`,
+          { parse_mode: 'HTML' }
+        );
+      }
+      return;
+    }
+
+    await recordPhotoRequest(userId);
+
     // Telegram dan eng katta o'lchamdagi rasmni olish
     const photos = ctx.message?.photo;
     if (!photos || photos.length === 0) {
-      await ctx.api.editMessageText(ctx.chat!.id, processing.message_id, '❌ Rasm topilmadi.');
+      await ctx.api.editMessageText(chatId, processing.message_id, '❌ Rasm topilmadi.');
       return;
     }
 
@@ -92,7 +94,6 @@ export async function handlePhoto(ctx: Context): Promise<void> {
     const base64 = Buffer.from(response.data).toString('base64');
     const mimeType = 'image/jpeg';
 
-    const chatId = ctx.chat!.id;
     const msgId = processing.message_id;
     await ctx.api.editMessageText(chatId, msgId, STATUS_IDENTIFY_LINES[0]);
 
@@ -153,7 +154,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
         : '🤔 Bu screenshotdan filmni aniqlay olmadim.' + hintMsg + '\n\n' +
           '📸 Aniqroq kadr yoki boshqa sahna yuborib ko‘ring\n' +
           '✍️ Yoki filmni so‘zlar bilan tasvirlab yozing';
-      await ctx.api.editMessageText(ctx.chat!.id, processing.message_id, body, { parse_mode: 'HTML' });
+      await ctx.api.editMessageText(chatId, processing.message_id, body, { parse_mode: 'HTML' });
       return;
     }
 
@@ -220,11 +221,12 @@ export async function handlePhoto(ctx: Context): Promise<void> {
     await sendMovieResult(ctx, details, { pendingFeedbackToken: pendingToken, confidence: identified.confidence });
   } catch (err) {
     console.error('Photo handler xato:', err);
-    await ctx.api.editMessageText(
-      ctx.chat!.id,
-      processing.message_id,
-      '❌ Xatolik yuz berdi. Qayta urinib ko\'ring.'
-    ).catch(() => {});
+    await safeEditOrNotify(
+      ctx,
+      chatId,
+      processing?.message_id,
+      '❌ Xatolik yuz berdi. Qayta urinib ko‘ring.'
+    );
   }
 }
 

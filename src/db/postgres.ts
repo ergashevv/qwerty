@@ -42,6 +42,11 @@ export async function initPostgresSchema(): Promise<void> {
   await p.query(`
     CREATE INDEX IF NOT EXISTS idx_analytics_created ON analytics_events (created_at DESC)
   `);
+  /** Dashboard / event_type bo‘yicha tez filtrlash */
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_analytics_event_type_created
+    ON analytics_events (event_type, created_at DESC)
+  `);
   await p.query(`
     CREATE INDEX IF NOT EXISTS idx_analytics_identification_feedback
     ON analytics_events (created_at DESC)
@@ -281,6 +286,43 @@ export async function initPostgresSchema(): Promise<void> {
       ALTER TABLE users ADD COLUMN blocked_at TIMESTAMPTZ NULL;
     EXCEPTION WHEN duplicate_column THEN NULL;
     END $$
+  `);
+
+  await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE users ADD COLUMN feedback_no_streak INTEGER NOT NULL DEFAULT 0;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `);
+
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS identification_problem_report_pending (
+      telegram_id BIGINT PRIMARY KEY,
+      predicted_title TEXT,
+      predicted_uz_title TEXT,
+      source TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS identification_problem_reports (
+      id BIGSERIAL PRIMARY KEY,
+      telegram_user_id BIGINT NOT NULL,
+      body_text TEXT NOT NULL,
+      predicted_title TEXT,
+      predicted_uz_title TEXT,
+      source TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_identification_problem_reports_time
+    ON identification_problem_reports (created_at DESC)
+  `);
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_identification_problem_reports_user
+    ON identification_problem_reports (telegram_user_id, created_at DESC)
   `);
 
   await p.query(`
