@@ -148,13 +148,15 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
           'Ikki marta ketma-ket noto‘g‘ri topilganga o‘xshaydi. Iltimos, qisqa yozing:\n' +
           '• nimani qanday noto‘g‘ri deb hisoblaysiz\n' +
           '• qanday yaxshiroq bo‘lishini xohlaysiz\n\n' +
-          'Keyingi <b>bitta</b> xabaringizni shu yerga yuboring — u avtomatik qabul qilinadi.',
+          'Keyingi <b>bitta</b> matn xabaringiz avtomatik qabul qilinadi. Rasm yuborsangiz, izohni caption qilib yozing.\n\n' +
+          '<i>Bekor qilish: /cancel · Batafsil: /feedback</i>',
         { parse_mode: 'HTML' }
       );
     } else {
       await safeReply(
         ctx,
-        '📝 Muammo haqidagi matningizni hali yozmadingiz. Iltimos, bitta xabar qilib yuboring — yoki yangi urinish uchun boshqa kadr yoki film nomini yuboring.',
+        '📝 Shikoyat matningizni hali yubormadingiz. Bitta matn yuboring — yoki yangi qidiruv uchun boshqa kadr yoki film nomini yuboring.\n\n' +
+          '<i>/cancel · /feedback</i>',
         { parse_mode: 'HTML' }
       );
     }

@@ -22,30 +22,13 @@ import { extractInstagramReelUrl } from '../services/reelsUrl';
 import { handleInstagramReelUrl } from './reels';
 import { STATUS_DETAILS_LINES, withRotatingStatus } from './rotatingStatus';
 import { setUserTextContext } from '../services/userContext';
-import { insertAnalyticsEvent } from '../db/postgres';
 import { completeSurveyProblemText, getSurveyProblemPending } from '../db/surveyBroadcast';
-import {
-  clearProblemReportPending,
-  getProblemReportPending,
-  insertIdentificationProblemReport,
-  resetFeedbackNoStreak,
-} from '../db/feedbackProblemReport';
+import { tryCompleteProblemReport } from './problemReportSubmit';
 import { safeEditOrNotify, safeReply } from '../utils/safeTelegram';
 
 export async function handleText(ctx: Context): Promise<void> {
   const text = ctx.message?.text?.trim();
   if (!text) return;
-
-  if (text.startsWith('/')) {
-    await safeReply(
-      ctx,
-      '❓ Bunday buyruq yo‘q yoki noto‘g‘ri format.\n\n' +
-        'Mavjud: /start, /help' +
-        (process.env.ADMIN_TELEGRAM_ID?.trim() ? ', /stats (faqat admin)' : '') +
-        '.\n\nFilm nomini yozing yoki screenshot yuboring.'
-    );
-    return;
-  }
 
   const userId = ctx.from?.id;
   if (!userId) return;
@@ -72,35 +55,19 @@ export async function handleText(ctx: Context): Promise<void> {
     return;
   }
 
-  const problemReportCtx = await getProblemReportPending(userId);
-  if (problemReportCtx) {
-    await Promise.all([
-      upsertUser(userId, ctx.from?.username, ctx.from?.first_name),
-      recordUserActivityDay(userId),
-    ]);
-    try {
-      const reportId = await insertIdentificationProblemReport(userId, text.slice(0, 4000), problemReportCtx);
-      await clearProblemReportPending(userId);
-      await resetFeedbackNoStreak(userId);
-      await insertAnalyticsEvent('identification_problem_report', {
-        report_id: reportId,
-        telegram_user_id: userId,
-        predicted_title: problemReportCtx.predictedTitle,
-        predicted_uz_title: problemReportCtx.predictedUzTitle,
-        source: problemReportCtx.source,
-        body_preview: text.slice(0, 500),
-      });
-      await ctx.reply(
-        'Rahmat! Yozganingiz qabul qilindi — jamoamiz ko‘rib chiqadi. Yana sinab ko‘rishingiz mumkin. ❤️',
-        { link_preview_options: { is_disabled: true } }
-      );
-    } catch (e) {
-      console.error('identification_problem_report:', e);
-      await safeReply(
-        ctx,
-        '❌ Hozir yozuvni saqlab bo‘lmadi. Keyinroq qayta urinib ko‘ring yoki /help'
-      );
-    }
+  /** Shikoyat matni slash bilan boshlangan bo‘lsa ham qabul qilinadi (/ dan oldin tekshirilmaydi). */
+  if (await tryCompleteProblemReport(ctx, userId, text)) {
+    return;
+  }
+
+  if (text.startsWith('/')) {
+    const adminHint = process.env.ADMIN_TELEGRAM_ID?.trim() ? ', /stats (faqat admin)' : '';
+    await safeReply(
+      ctx,
+      '❓ Bunday buyruq topilmadi yoki format noto‘g‘ri.\n\n' +
+        `Mavjud: /start, /help, /feedback, /cancel${adminHint}.\n\n` +
+        'Film nomini yozing yoki screenshot yuboring.'
+    );
     return;
   }
 

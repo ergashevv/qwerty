@@ -34,6 +34,9 @@ import {
 } from './rotatingStatus';
 import { maybeDonateAfterSuccess } from './donatePrompt';
 import { safeEditOrNotify } from '../utils/safeTelegram';
+import { getProblemReportPending } from '../db/feedbackProblemReport';
+import { tryCompleteProblemReport } from './problemReportSubmit';
+import { PROBLEM_REPORT_PHOTO_NEED_CAPTION_HTML } from '../messages/feedback';
 
 export async function handlePhoto(ctx: Context): Promise<void> {
   const userId  = ctx.from?.id;
@@ -43,13 +46,26 @@ export async function handlePhoto(ctx: Context): Promise<void> {
   if (!userId) return;
 
   const chatId = ctx.chat!.id;
+
+  if (await getProblemReportPending(userId)) {
+    const captionForReport = ctx.message?.caption?.trim() ?? '';
+    if (captionForReport.length > 0) {
+      await tryCompleteProblemReport(ctx, userId, captionForReport);
+    } else {
+      await ctx.reply(PROBLEM_REPORT_PHOTO_NEED_CAPTION_HTML, { parse_mode: 'HTML' });
+    }
+    return;
+  }
+
   let processing: { message_id: number } | undefined;
   try {
     processing = await ctx.reply('🔍 Qidirilmoqda...');
     void ctx.api.sendChatAction(chatId, 'typing');
 
-    await upsertUser(userId, username, firstName);
-    await recordUserActivityDay(userId);
+    await Promise.all([
+      upsertUser(userId, username, firstName),
+      recordUserActivityDay(userId),
+    ]);
 
     const photoGate = await canUserSendPhoto(userId);
     if (!photoGate.ok) {

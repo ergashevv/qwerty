@@ -3,9 +3,9 @@
  *   1. normalizeTitle — yil va IMDb stripping to'g'ri ishlashi
  *   2. titlesMatch   — "Avengers" → "Avengers: Endgame" mos kelishi (includes >= 6 chars)
  *   3. withRotatingStatus — typing heartbeat va status rotation
- *   4. Photo handler — "Qidirilmoqda..." darhol yuborilishi (DB dan oldin)
- *   5. Text handler  — "Qidirilmoqda..." darhol yuborilishi
- *   6. Callback query — sequentialize dan OLDIN ishlashi (drop_pending_updates)
+ *   4. Photo handler — "Qidirilmoqda..." darhol yuborilishi (problem report tekshiruvidan keyin, DB dan oldin)
+ *   5. Text handler  — "Qidirilmoqda..." darhol yuborilishi; shikoyat oqimi tryCompleteProblemReport dan keyin
+ *   6. Bot config — drop_pending_updates, callback vs messagePipeline, my_chat_member tartibi
  */
 
 import { normalizeTitle, titlesMatch } from '../services/movieService';
@@ -224,6 +224,9 @@ describe('Photo handler — darhol "Qidirilmoqda..." xabari', () => {
     jest.mock('../handlers/donatePrompt', () => ({
       maybeDonateAfterSuccess: jest.fn(async () => {}),
     }));
+    jest.mock('../db/feedbackProblemReport', () => ({
+      getProblemReportPending: jest.fn(async () => null),
+    }));
 
     const ctx = mockCtx();
     ctx.reply.mockImplementation(async () => {
@@ -293,14 +296,8 @@ describe('Text handler — darhol "Qidirilmoqda..." xabari', () => {
       getSurveyProblemPending: jest.fn(async () => null),
       completeSurveyProblemText: jest.fn(async () => true),
     }));
-    jest.mock('../db/postgres', () => ({
-      insertAnalyticsEvent: jest.fn(async () => {}),
-    }));
-    jest.mock('../db/feedbackProblemReport', () => ({
-      getProblemReportPending: jest.fn(async () => null),
-      clearProblemReportPending: jest.fn(async () => {}),
-      insertIdentificationProblemReport: jest.fn(async () => 1),
-      resetFeedbackNoStreak: jest.fn(async () => {}),
+    jest.mock('../handlers/problemReportSubmit', () => ({
+      tryCompleteProblemReport: jest.fn(async () => false),
     }));
 
     const replyMock = jest.fn(async () => {
@@ -337,49 +334,66 @@ describe('Text handler — darhol "Qidirilmoqda..." xabari', () => {
 
 // ─── 6. drop_pending_updates — bot config tekshiruvi ─────────────────────────
 
-describe('Bot config — drop_pending_updates va callback handler order', () => {
+describe('Bot config — drop_pending_updates, callback vs message pipeline', () => {
   test('bot.ts drop_pending_updates true qilib sozlangan', async () => {
     const fs = await import('fs');
     const content = fs.readFileSync('src/bot.ts', 'utf-8');
     expect(content).toContain('drop_pending_updates: true');
   });
 
-  test('callback query handlerlari sequentialize dan OLDIN joylashgan', async () => {
+  /** `sequentialize` endi faqat xabarlar uchun `messagePipeline` ichida. */
+  test('sequentialize faqat messagePipeline ichida (global bot.use emas)', async () => {
     const fs = await import('fs');
     const content = fs.readFileSync('src/bot.ts', 'utf-8');
-    const fbIdx   = content.indexOf("bot.callbackQuery(/^fb:/");
-    const seqIdx  = content.indexOf('bot.use(sequentialize');
-    expect(fbIdx).toBeGreaterThan(0);
-    expect(seqIdx).toBeGreaterThan(0);
-    // callback handler must be registered BEFORE sequentialize middleware
-    expect(fbIdx).toBeLessThan(seqIdx);
+    expect(content).toContain('const messagePipeline = new Composer()');
+    expect(content).toContain('messagePipeline.use(sequentialize');
+    expect(content).not.toMatch(/\bbot\.use\(\s*sequentialize\s*\(/);
   });
 
-  test('donate callback handleri ham sequentialize dan OLDIN joylashgan', async () => {
+  test('callback query handlerlari messagePipeline (sequentialize) dan OLDIN', async () => {
+    const fs = await import('fs');
+    const content = fs.readFileSync('src/bot.ts', 'utf-8');
+    const fbIdx = content.indexOf("bot.callbackQuery(/^fb:/");
+    const pipeIdx = content.indexOf('const messagePipeline = new Composer()');
+    expect(fbIdx).toBeGreaterThan(0);
+    expect(pipeIdx).toBeGreaterThan(0);
+    expect(fbIdx).toBeLessThan(pipeIdx);
+  });
+
+  test('donate callback handleri ham messagePipeline dan OLDIN', async () => {
     const fs = await import('fs');
     const content = fs.readFileSync('src/bot.ts', 'utf-8');
     const donateIdx = content.indexOf('bot.callbackQuery(/^donate:/');
-    const seqIdx    = content.indexOf('bot.use(sequentialize');
-    expect(donateIdx).toBeLessThan(seqIdx);
+    const pipeIdx = content.indexOf('const messagePipeline = new Composer()');
+    expect(donateIdx).toBeLessThan(pipeIdx);
   });
 
-  test('so‘rovnoma (svy) callback handleri ham sequentialize dan OLDIN joylashgan', async () => {
+  test('so‘rovnoma (svy) callback handleri ham messagePipeline dan OLDIN', async () => {
     const fs = await import('fs');
     const content = fs.readFileSync('src/bot.ts', 'utf-8');
     const svyIdx = content.indexOf('bot.callbackQuery(/^svy:/');
-    const seqIdx = content.indexOf('bot.use(sequentialize');
+    const pipeIdx = content.indexOf('const messagePipeline = new Composer()');
     expect(svyIdx).toBeGreaterThan(0);
-    expect(svyIdx).toBeLessThan(seqIdx);
+    expect(svyIdx).toBeLessThan(pipeIdx);
   });
 
-  test('/donate tasdiq (dbc) callback ham sequentialize dan OLDIN', async () => {
+  test('/donate tasdiq (dbc) callback ham messagePipeline dan OLDIN', async () => {
     const fs = await import('fs');
     const content = fs.readFileSync('src/bot.ts', 'utf-8');
     const dbcIdx = content.indexOf('bot.callbackQuery(/^dbc:/');
-    const seqIdx = content.indexOf('bot.use(sequentialize');
+    const pipeIdx = content.indexOf('const messagePipeline = new Composer()');
     expect(dbcIdx).toBeGreaterThan(0);
-    expect(dbcIdx).toBeLessThan(seqIdx);
+    expect(dbcIdx).toBeLessThan(pipeIdx);
     expect(content).toContain("bot.command('donate'");
-    expect(content).not.toContain("broadcastsurvey");
+    expect(content).not.toContain('broadcastsurvey');
+  });
+
+  test('my_chat_member sequentialize dan tashqari — uzoq foto qidiruvi bloklashni kutmaydi', async () => {
+    const fs = await import('fs');
+    const content = fs.readFileSync('src/bot.ts', 'utf-8');
+    const memberIdx = content.indexOf("bot.on('my_chat_member'");
+    const pipeIdx = content.indexOf('const messagePipeline = new Composer()');
+    expect(memberIdx).toBeGreaterThan(0);
+    expect(memberIdx).toBeLessThan(pipeIdx);
   });
 });

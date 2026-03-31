@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { Bot, GrammyError, HttpError } from 'grammy';
+import { Bot, Composer, GrammyError, HttpError } from 'grammy';
 import { sequentialize } from '@grammyjs/runner';
 import { handlePhoto } from './handlers/photo';
 import { handleText } from './handlers/text';
@@ -22,6 +22,17 @@ import {
 } from './handlers/surveyBroadcast';
 import { isAdminTelegram } from './utils/isAdmin';
 import { safeReply } from './utils/safeTelegram';
+import {
+  clearProblemReportPending,
+  getProblemReportPending,
+  resetFeedbackNoStreak,
+} from './db/feedbackProblemReport';
+import {
+  FEEDBACK_CANCEL_NOTHING_HTML,
+  FEEDBACK_CANCEL_OK_HTML,
+  FEEDBACK_COMMAND_HELP_HTML,
+  FEEDBACK_PENDING_REMINDER_HTML,
+} from './messages/feedback';
 
 const _botToken = process.env.BOT_TOKEN;
 if (!_botToken) {
@@ -54,10 +65,10 @@ async function bootstrap(): Promise<void> {
   const bot = new Bot(botToken);
 
   /**
-   * Callback query'lar sequentialize dan OLDIN ishlov olishi kerak.
-   * Sabab: sequentialize bir user'dan kelgan barcha update'larni navbatga qo'yadi.
-   * Agar foto/matn 15-20 sek ishlayotgan bo'lsa, user ✅/❌ tugmasini bosganda
-   * callback query ham navbatda kutadi → 10 sek o'tgach Telegram "query is too old" beradi.
+   * Callback query'lar `sequentialize` ichidagi xabar pipeline'iga tushmasligi kerak.
+   * `sequentialize` faqat `messagePipeline` ichida — mos kelgan callbacklar bu yerga kelmaydi.
+   * `my_chat_member` ham shu pipeline'da emas — bloklash/yangi a'zo hodisalari uzoq foto
+   * qidiruvi tugashini kutmaydi.
    */
   bot.callbackQuery(/^donate:/, async (ctx) => {
     await handleDonateCallback(ctx);
@@ -87,13 +98,11 @@ async function bootstrap(): Promise<void> {
     }
     const name = ctx.from?.first_name || "Do'stim";
     await ctx.reply(
-      `👋 Assalomu alaykum, <b>${name}</b>!\n\n` +
-        `🎬 Men <b>Kinova Bot</b>man — istalgan film yoki serialning kadridan uni topib beraman.\n\n` +
-        `<b>Qanday foydalanish:</b>\n` +
-        `📸 Film yoki serialdan screenshot yuboring\n` +
-        `🔗 Yoki Instagram <b>Reels</b> havolasini yuboring\n` +
-        `✍️ Yoki film nomi / tavsifini yozing\n\n` +
-        `Bot filmni tanib, <b>o'zbek tilida</b> tomosha qilish havolalarini topib beradi! 🇺🇿`,
+      `Assalomu alaykum, <b>${name}</b>! 🎬\n\n` +
+        `📸 Screenshot · 🔗 Reels · ✍️ matn — kadr yoki tavsifdan filmni topib, <b>o‘zbekcha</b> tomosha havolalarini beraman.\n\n` +
+        `Har bir natijada pastda aynan shu ikkita tugma chiqadi:\n` +
+        `<b>✅ Ha, shu film</b>     <b>❌ Yo'q, bu emas</b>\n\n` +
+        `To‘g‘ri topilsa — chapdagi, yo‘q bo‘lsa — o‘ngdagi. Fikringiz botni yaxshilaydi. Batafsil: <code>/feedback</code> 🇺🇿`,
       { parse_mode: 'HTML' }
     );
   });
@@ -113,9 +122,35 @@ async function bootstrap(): Promise<void> {
         `<b>Natijada:</b>\n` +
         `🎬 Film nomi (o'zbekcha)\n` +
         `📖 Qisqacha mazmun\n` +
-        `▶️ O'zbek tilida tomosha qilish havolalari`,
+        `▶️ O'zbek tilida tomosha qilish havolalari\n\n` +
+        `<b>Fikr:</b> har bir natijada <b>✅ Ha, shu film</b> va <b>❌ Yo'q, bu emas</b> tugmalari. ` +
+        `Ketma-ket ikki marta «Yo'q, bu emas»dan keyin matnli izoh so‘raladi. ` +
+        `To‘liq ma’lumot: <code>/feedback</code>`,
       { parse_mode: 'HTML' }
     );
+  });
+
+  bot.command('feedback', async (ctx) => {
+    const uid = ctx.from?.id;
+    if (!uid) return;
+    if (await getProblemReportPending(uid)) {
+      await ctx.reply(FEEDBACK_PENDING_REMINDER_HTML, { parse_mode: 'HTML' });
+      return;
+    }
+    await ctx.reply(FEEDBACK_COMMAND_HELP_HTML, { parse_mode: 'HTML' });
+  });
+
+  bot.command('cancel', async (ctx) => {
+    const uid = ctx.from?.id;
+    if (!uid) return;
+    const pending = await getProblemReportPending(uid);
+    if (!pending) {
+      await ctx.reply(FEEDBACK_CANCEL_NOTHING_HTML, { parse_mode: 'HTML' });
+      return;
+    }
+    await clearProblemReportPending(uid);
+    await resetFeedbackNoStreak(uid);
+    await ctx.reply(FEEDBACK_CANCEL_OK_HTML, { parse_mode: 'HTML' });
   });
 
   /** Yuborilgan so‘rovnoma xabarlarini o‘chirish (jurnalda `message_id` bo‘lsa) */
@@ -188,8 +223,6 @@ async function bootstrap(): Promise<void> {
     }
   });
 
-  bot.use(sequentialize((ctx) => ctx.from?.id?.toString() ?? 'unknown'));
-
   bot.on('my_chat_member', async (ctx) => {
     const uid = ctx.from?.id;
     if (!uid) return;
@@ -207,9 +240,10 @@ async function bootstrap(): Promise<void> {
     }
   });
 
-  bot.on('message:photo', handlePhoto);
-
-  bot.on('message:document', async (ctx) => {
+  const messagePipeline = new Composer();
+  messagePipeline.use(sequentialize((ctx) => ctx.from?.id?.toString() ?? 'unknown'));
+  messagePipeline.on('message:photo', handlePhoto);
+  messagePipeline.on('message:document', async (ctx) => {
     const doc = ctx.message?.document;
     if (!doc?.mime_type?.startsWith('image/')) {
       await ctx.reply('📸 Iltimos, rasm yuboring (screenshot yoki foto).');
@@ -217,8 +251,8 @@ async function bootstrap(): Promise<void> {
     }
     await handlePhoto(ctx);
   });
-
-  bot.on('message:text', handleText);
+  messagePipeline.on('message:text', handleText);
+  bot.use(messagePipeline);
 
   bot.catch((err) => {
     const ctx = err.ctx;
