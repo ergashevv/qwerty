@@ -2,6 +2,7 @@ import { Context, InputFile } from 'grammy';
 import { getPendingFeedbackByToken } from '../db/feedbackPending';
 import { getCached, getCachedByTmdb } from '../db';
 import { renderShareCardPng } from '../services/shareCardImage';
+import { buildWatchLinksCaptionFromKeyboardJson } from './photo';
 
 const PREFIX = 'shc:';
 
@@ -50,8 +51,16 @@ export async function handleShareCard(ctx: Context): Promise<void> {
       uzTitle: row.predicted_uz_title,
     });
 
+    /** Forward qilganda ham havolalar qolishi uchun (inline tugmalar o‘tmaydi). */
+    const linksBlock = buildWatchLinksCaptionFromKeyboardJson(row.keyboard_keep_json);
+    let caption =
+      '📤 <b>Kinova</b> — Story yoki do‘stlarga yuborish uchun.' + linksBlock;
+    if (caption.length > 1024) {
+      caption = caption.slice(0, 1021) + '...';
+    }
+
     await ctx.replyWithPhoto(new InputFile(png, 'kinova-share.jpg'), {
-      caption: '📤 <b>Kinova</b> — Story yoki do‘stlarga yuborish uchun.',
+      caption,
       parse_mode: 'HTML',
     });
   } catch (e) {

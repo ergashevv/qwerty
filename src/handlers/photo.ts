@@ -283,6 +283,93 @@ export async function handlePhoto(ctx: Context): Promise<void> {
   }
 }
 
+const TELEGRAM_CAPTION_MAX = 1024;
+
+/**
+ * Forward qilganda inline tugmalar o‘tmaydi — havolalar caption ichida ham beriladi.
+ * `keyboard_keep_json` dan qayta tiklash uchun (Ulashish karti).
+ */
+export function buildWatchLinksCaptionFromKeyboardJson(keyboardJson: string | null): string {
+  if (!keyboardJson?.trim()) return '';
+  try {
+    const o = JSON.parse(keyboardJson) as { inline_keyboard?: { url?: string; text?: string }[][] };
+    const lines: string[] = [];
+    for (const row of o.inline_keyboard ?? []) {
+      for (const btn of row) {
+        if (btn.url && btn.text) {
+          lines.push(`• <a href="${escHtml(btn.url)}">${escHtml(btn.text)}</a>`);
+        }
+      }
+    }
+    if (lines.length === 0) return '';
+    return `\n\n🔗 <b>Tomosha havolalari</b>\n` + lines.join('\n');
+  } catch {
+    return '';
+  }
+}
+
+/** Asosiy natija caption — `MovieDetails` dan (inline tugmalar bilan bir xil havolalar). */
+export function buildWatchLinksCaptionHtml(details: MovieDetails): string {
+  const lines: string[] = [];
+  for (const link of details.watchLinks.slice(0, 4)) {
+    lines.push(`• <a href="${escHtml(link.link)}">▶️ ${escHtml(link.source)}</a>`);
+  }
+  if (details.imdbUrl) {
+    lines.push(`• <a href="${escHtml(details.imdbUrl)}">🌐 IMDb</a>`);
+  }
+  const q =
+    (details.originalTitle && details.originalTitle.trim()) ||
+    details.title ||
+    details.uzTitle;
+  const gUrl = `https://www.google.com/search?q=${encodeURIComponent(q + ' uzbek tilida')}`;
+  lines.push(`• <a href="${escHtml(gUrl)}">🔍 Google'da qidirish</a>`);
+  if (lines.length === 0) return '';
+  return `\n\n🔗 <b>Tomosha havolalari</b>\n` + lines.join('\n');
+}
+
+function buildMovieResultCaption(
+  details: MovieDetails,
+  opts?: { confidence?: string | null }
+): string {
+  const mainTitle = details.title || details.originalTitle || details.uzTitle;
+  const uzLine =
+    details.uzTitle && details.uzTitle !== mainTitle
+      ? `\n📽 O'zbekcha: <b>${escHtml(details.uzTitle)}</b>`
+      : '';
+  const yearLine = details.year ? ` | 📅 ${details.year}` : '';
+  const ratingLine = details.rating !== 'N/A' ? ` | ⭐ ${details.rating}/10` : '';
+  const confidenceLine =
+    opts?.confidence === 'medium' ? `\n\n<i>🤖 AI taklifi — noto'g'ri bo'lishi mumkin.</i>` : '';
+  const linksBlock = buildWatchLinksCaptionHtml(details);
+
+  const buildWithPlotLimit = (plotLimit: number) => {
+    const plotPart =
+      details.plotUz.length <= plotLimit
+        ? details.plotUz
+        : `${details.plotUz.slice(0, plotLimit)}...`;
+    return [
+      `🎬 <b>${escHtml(mainTitle)}</b>${uzLine}`,
+      `${yearLine}${ratingLine}`.trim(),
+      ``,
+      `📖 ${escHtml(plotPart)}`,
+      confidenceLine,
+      linksBlock,
+    ]
+      .filter(Boolean)
+      .join('\n');
+  };
+
+  let plotLimit = 300;
+  for (let i = 0; i < 12; i++) {
+    const c = buildWithPlotLimit(plotLimit);
+    if (c.length <= TELEGRAM_CAPTION_MAX) return c;
+    plotLimit = Math.max(40, Math.floor(plotLimit * 0.7));
+  }
+  const last = buildWithPlotLimit(40);
+  if (last.length <= TELEGRAM_CAPTION_MAX) return last;
+  return `${last.slice(0, TELEGRAM_CAPTION_MAX - 3)}...`;
+}
+
 /** Tomosha havolalari + IMDb/Google — fikr tugmalari qo‘shilmasdan */
 export function buildWatchKeyboard(details: MovieDetails): InlineKeyboardButton[][] {
   const rows: InlineKeyboardButton[][] = details.watchLinks.slice(0, 4).map((link) => [
@@ -312,22 +399,7 @@ export async function sendMovieResult(
   details: MovieDetails,
   opts?: { pendingFeedbackToken?: string; confidence?: string | null }
 ): Promise<void> {
-  const mainTitle = details.title || details.originalTitle || details.uzTitle;
-  const uzLine = details.uzTitle && details.uzTitle !== mainTitle
-    ? `\n📽 O'zbekcha: <b>${escHtml(details.uzTitle)}</b>` : '';
-  const yearLine  = details.year ? ` | 📅 ${details.year}` : '';
-  const ratingLine = details.rating !== 'N/A' ? ` | ⭐ ${details.rating}/10` : '';
-  const confidenceLine = opts?.confidence === 'medium'
-    ? `\n\n<i>🤖 AI taklifi — noto'g'ri bo'lishi mumkin.</i>`
-    : '';
-
-  const caption = [
-    `🎬 <b>${escHtml(mainTitle)}</b>${uzLine}`,
-    `${yearLine}${ratingLine}`.trim(),
-    ``,
-    `📖 ${escHtml(details.plotUz.slice(0, 300))}${details.plotUz.length > 300 ? '...' : ''}`,
-    confidenceLine,
-  ].filter(Boolean).join('\n');
+  const caption = buildMovieResultCaption(details, opts);
 
   const watchButtons = buildWatchKeyboard(details);
   const pTok = opts?.pendingFeedbackToken;
@@ -342,17 +414,17 @@ export async function sendMovieResult(
   const replyMarkup = { inline_keyboard: watchButtons };
 
   try {
+    const sendOpts = {
+      parse_mode: 'HTML' as const,
+      reply_markup: replyMarkup,
+    };
     if (details.posterUrl) {
       await ctx.replyWithPhoto(details.posterUrl, {
         caption,
-        parse_mode: 'HTML',
-        reply_markup: replyMarkup,
+        ...sendOpts,
       });
     } else {
-      await ctx.reply(caption, {
-        parse_mode: 'HTML',
-        reply_markup: replyMarkup,
-      });
+      await ctx.reply(caption, sendOpts);
     }
   } catch {
     // Poster yuklab bo'lmasa, matnsiz jo'natish
@@ -365,7 +437,7 @@ export async function sendMovieResult(
   await maybeDonateAfterSuccess(ctx).catch(() => {});
 }
 
-function escHtml(text: string): string {
+export function escHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')

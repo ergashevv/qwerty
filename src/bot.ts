@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { Bot, Composer, GrammyError, HttpError } from 'grammy';
+import { Bot, Composer, GrammyError, HttpError, type Context } from 'grammy';
 import { run, sequentialize } from '@grammyjs/runner';
 import { handlePhoto } from './handlers/photo';
 import { handleText } from './handlers/text';
@@ -38,6 +38,27 @@ import {
   FEEDBACK_WRITE_NEXT_HTML,
 } from './messages/feedback';
 import { handleProblemReportUnsupportedMedia } from './handlers/problemReportWrongMedia';
+
+/** `t.me/bot?start=feedback` — xabar matni: `/start feedback` */
+const START_PAYLOAD_FEEDBACK = 'feedback';
+
+function parseStartPayload(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  const m = /^\/start(?:@\w+)?(?:\s+(.+))?$/i.exec(text.trim());
+  return m?.[1]?.trim();
+}
+
+async function runFeedbackFlow(ctx: Context): Promise<void> {
+  const uid = ctx.from?.id;
+  if (!uid) return;
+  const kb = { reply_markup: feedbackModeReplyMarkup() };
+  if (await getProblemReportPending(uid)) {
+    await ctx.reply(FEEDBACK_PENDING_REMINDER_HTML, { parse_mode: 'HTML', ...kb });
+    return;
+  }
+  await setFreeComplaintPending(uid);
+  await ctx.reply(FEEDBACK_WRITE_NEXT_HTML, { parse_mode: 'HTML', ...kb });
+}
 
 const _botToken = process.env.BOT_TOKEN;
 if (!_botToken) {
@@ -112,13 +133,33 @@ async function bootstrap(): Promise<void> {
       await markUserStarted(uid);
       await recordUserActivityDay(uid);
     }
+    const startArg = parseStartPayload(ctx.message?.text);
+    if (startArg === START_PAYLOAD_FEEDBACK) {
+      await runFeedbackFlow(ctx);
+      return;
+    }
     const name = ctx.from?.first_name || "Do'stim";
+    const botU = ctx.me?.username ?? process.env.BOT_USERNAME?.replace(/^@/, '') ?? '';
+    const feedbackLine = botU
+      ? `<b>Shikoyat yoki taklif</b> — <a href="https://t.me/${botU}?start=${START_PAYLOAD_FEEDBACK}">/feedback</a>`
+      : `<b>Shikoyat yoki taklif</b> — <code>/feedback</code>`;
     await ctx.reply(
       `Assalomu alaykum, <b>${name}</b>! 🎬\n\n` +
-        `📸 Screenshot · 🔗 Reels / YouTube · ✍️ matn — kadr yoki tavsifdan filmni topib, <b>o‘zbekcha</b> tomosha havolalarini beraman.\n\n` +
-        `Pastda: tomosha havolalari, <b>✅ Ha</b> / <b>❌ Yo‘q</b>, <b>📤 Ulashish karti</b> (Story).\n\n` +
-        `To‘g‘ri topilsa — ✅, yo‘q bo‘lsa — ❌. Shikoyat: <code>/feedback</code> 🇺🇿`,
-      { parse_mode: 'HTML' }
+        `<b>Nima qiladi?</b>\n` +
+        `Kadr, video havola yoki matndan filmni topib, <b>o‘zbekcha tomosha havolalarini</b> yuboraman.\n\n` +
+        `<b>Yuborishingiz mumkin</b>\n` +
+        `📸 <b>Rasm</b> — filmdan screenshot\n` +
+        `🔗 <b>Havola</b> — Reels, YouTube\n` +
+        `✍️ <b>Matn</b> — nom yoki qisqa tavsif\n\n` +
+        `<b>Film topilgach pastda chiqadi</b>\n` +
+        `▶️ Tomosha havolalari\n` +
+        `✅ Ha / ❌ Yo‘q — to‘g‘ri yoki noto‘g‘ri\n` +
+        `📤 Ulashish karti (Story)\n\n` +
+        feedbackLine,
+      {
+        parse_mode: 'HTML',
+        link_preview_options: { is_disabled: true },
+      }
     );
   });
 
@@ -145,15 +186,7 @@ async function bootstrap(): Promise<void> {
   });
 
   bot.command('feedback', async (ctx) => {
-    const uid = ctx.from?.id;
-    if (!uid) return;
-    const kb = { reply_markup: feedbackModeReplyMarkup() };
-    if (await getProblemReportPending(uid)) {
-      await ctx.reply(FEEDBACK_PENDING_REMINDER_HTML, { parse_mode: 'HTML', ...kb });
-      return;
-    }
-    await setFreeComplaintPending(uid);
-    await ctx.reply(FEEDBACK_WRITE_NEXT_HTML, { parse_mode: 'HTML', ...kb });
+    await runFeedbackFlow(ctx);
   });
 
   bot.command('cancel', async (ctx) => {
