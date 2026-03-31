@@ -33,6 +33,48 @@ export async function getSurveyRecipientIds(): Promise<number[]> {
   return out;
 }
 
+export async function insertSurveySentMessage(
+  campaignId: string,
+  telegramId: number,
+  messageId: number
+): Promise<void> {
+  await getPostgresPool().query(
+    `INSERT INTO survey_broadcast_sent (campaign_id, telegram_id, message_id) VALUES ($1, $2, $3)`,
+    [campaignId, telegramId, messageId]
+  );
+}
+
+export async function getLatestCampaignIdFromSent(): Promise<string | null> {
+  const r = await getPostgresPool().query(
+    `
+    SELECT campaign_id
+    FROM survey_broadcast_sent
+    GROUP BY campaign_id
+    ORDER BY MAX(created_at) DESC
+    LIMIT 1
+    `
+  );
+  const row = r.rows[0] as { campaign_id: string } | undefined;
+  return row?.campaign_id ?? null;
+}
+
+export async function listSurveySentMessages(
+  campaignId: string
+): Promise<{ telegram_id: number; message_id: number }[]> {
+  const r = await getPostgresPool().query(
+    `SELECT telegram_id, message_id FROM survey_broadcast_sent WHERE campaign_id = $1 ORDER BY telegram_id`,
+    [campaignId]
+  );
+  return r.rows.map((row: { telegram_id: string | number; message_id: string | number }) => ({
+    telegram_id: Number(row.telegram_id),
+    message_id: Number(row.message_id),
+  }));
+}
+
+export async function deleteSurveySentLog(campaignId: string): Promise<void> {
+  await getPostgresPool().query(`DELETE FROM survey_broadcast_sent WHERE campaign_id = $1`, [campaignId]);
+}
+
 export async function insertSurveySatisfied(
   campaignId: string,
   telegramUserId: number,

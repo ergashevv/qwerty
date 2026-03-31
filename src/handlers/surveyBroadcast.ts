@@ -4,8 +4,12 @@ import { getPostgresPool } from '../db/postgres';
 import { isAdminTelegram } from '../utils/isAdmin';
 import {
   clearSurveyProblemPending,
+  deleteSurveySentLog,
+  getLatestCampaignIdFromSent,
   getSurveyRecipientIds,
   insertSurveySatisfied,
+  insertSurveySentMessage,
+  listSurveySentMessages,
   setSurveyProblemPending,
 } from '../db/surveyBroadcast';
 /** Admin /donate (tasdiqdan keyin) — barcha userlarga bir xil matn + Ha/Yo‘q */
@@ -33,6 +37,47 @@ function surveyKeyboard(campaignId: string): InlineKeyboard {
     .text('❌ Yo‘q', `svy:n:${campaignId}`);
 }
 
+export async function runSurveyDeleteCampaign(ctx: Context, campaignIdArg: string | null): Promise<void> {
+  const cid =
+    campaignIdArg?.trim() ||
+    (await getLatestCampaignIdFromSent());
+  if (!cid) {
+    await ctx.reply(
+      'Bazada yuborilgan xabarlar jurnali bo‘sh.\n\n' +
+        'Eski yuborishlar uchun `message_id` saqlanmagan — faqat yangi versiyadan keyin yuborilgan xabarni o‘chirish mumkin.'
+    );
+    return;
+  }
+  const rows = await listSurveySentMessages(cid);
+  if (rows.length === 0) {
+    await ctx.reply(`Kampaniya <code>${cid}</code> uchun jurnal topilmadi.`, { parse_mode: 'HTML' });
+    return;
+  }
+  await ctx.reply(
+    `⏳ <b>O‘chirish</b> <code>${cid}</code> — ${rows.length} ta xabar...\n` +
+      `(<i>48 soatdan eski xabarlar Telegram tomonidan o‘chirilmasligi mumkin</i>)`,
+    { parse_mode: 'HTML' }
+  );
+  let ok = 0;
+  let fail = 0;
+  for (const row of rows) {
+    try {
+      await ctx.api.deleteMessage(row.telegram_id, row.message_id);
+      ok++;
+    } catch {
+      fail++;
+    }
+    await new Promise((r) => setTimeout(r, 35));
+  }
+  await deleteSurveySentLog(cid).catch(() => {});
+  await ctx.reply(
+    `🗑 Kampaniya <code>${cid}</code>\n` +
+      `O‘chirildi: ${ok}  |  Xato: ${fail}\n\n` +
+      `Jurnal bazadan tozalandi.`,
+    { parse_mode: 'HTML' }
+  );
+}
+
 export function generateSurveyCampaignId(): string {
   return crypto.randomBytes(6).toString('hex');
 }
@@ -56,29 +101,38 @@ export async function handleSurveyCallback(ctx: Context): Promise<void> {
   const kind = parts[1];
   const campaignId = parts[2];
 
+  const msg = cq?.message;
+  if (!msg || !('message_id' in msg)) {
+    await ctx.answerCallbackQuery({ text: 'Xabar topilmadi.', show_alert: true });
+    return;
+  }
+  const chatId = msg.chat.id;
+  const messageId = msg.message_id;
+
   if (kind === 'y') {
-    /** Tugma «yuklanmoqda» holatida qolmasin — DB dan oldin yopamiz */
+    /** callback API: ctx.reply ba’zan prod da ishlamay qoladi — faqat ctx.api.sendMessage */
     await ctx.answerCallbackQuery();
     try {
       const res = await insertSurveySatisfied(campaignId, uid, true, null);
       await clearSurveyProblemPending(uid);
       if (res === 'duplicate') {
-        await ctx.reply('Siz allaqachon javob bergansiz.');
+        await ctx.api.sendMessage(uid, 'Siz allaqachon javob bergansiz.', {
+          link_preview_options: { is_disabled: true },
+        });
         return;
       }
+      await ctx.api
+        .editMessageReplyMarkup(chatId, messageId, { reply_markup: { inline_keyboard: [] } })
+        .catch(() => {});
       try {
-        await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
-      } catch {
-        /* ignore */
-      }
-      try {
-        await ctx.reply(SURVEY_HA_REPLY_HTML, {
+        await ctx.api.sendMessage(uid, SURVEY_HA_REPLY_HTML, {
           parse_mode: 'HTML',
           link_preview_options: { is_disabled: true },
         });
       } catch (htmlErr) {
         console.error('[survey] Ha HTML reply:', (htmlErr as Error).message);
-        await ctx.reply(
+        await ctx.api.sendMessage(
+          uid,
           "💚 Kinova siz bilan o'smoqda!\n\n" +
             'Qo‘llab-quvvatlash: Humo 9860200101841662 (Ergashev P.). Rahmat!',
           { link_preview_options: { is_disabled: true } }
@@ -86,10 +140,11 @@ export async function handleSurveyCallback(ctx: Context): Promise<void> {
       }
     } catch (e) {
       console.error('[survey] Ha DB:', e);
-      await ctx.reply(
-        'Javobni saqlab bo‘lmadi (bazaga ulanish?). Keyinroq qayta urinib ko‘ring.',
-        { link_preview_options: { is_disabled: true } }
-      );
+      await ctx.api
+        .sendMessage(uid, 'Javobni saqlab bo‘lmadi (bazaga ulanish?). Keyinroq qayta urinib ko‘ring.', {
+          link_preview_options: { is_disabled: true },
+        })
+        .catch((err) => console.error('[survey] Ha fallback send:', err));
     }
     return;
   }
@@ -98,14 +153,16 @@ export async function handleSurveyCallback(ctx: Context): Promise<void> {
     await setSurveyProblemPending(uid, campaignId);
     await ctx.answerCallbackQuery();
     try {
-      await ctx.editMessageText(AFTER_NO_HTML, {
+      await ctx.api.editMessageText(chatId, messageId, AFTER_NO_HTML, {
         parse_mode: 'HTML',
         link_preview_options: { is_disabled: true },
         reply_markup: { inline_keyboard: [] },
       });
     } catch {
-      await ctx.reply(
-        'Iltimos, kuzatayotgan muammo yoki taklifingizni qisqa yozing — xabar adminlarga yetadi.'
+      await ctx.api.sendMessage(
+        uid,
+        'Iltimos, kuzatayotgan muammo yoki taklifingizni qisqa yozing — xabar adminlarga yetadi.',
+        { link_preview_options: { is_disabled: true } }
       );
     }
     return;
@@ -273,11 +330,16 @@ export async function runSurveyBroadcast(
   for (let i = 0; i < ids.length; i++) {
     const chatId = ids[i]!;
     try {
-      await ctx.api.sendMessage(chatId, SURVEY_HTML, {
+      const sent = await ctx.api.sendMessage(chatId, SURVEY_HTML, {
         reply_markup: kb,
         link_preview_options: { is_disabled: true },
       });
       ok++;
+      if (sent?.message_id != null) {
+        await insertSurveySentMessage(campaignId, chatId, sent.message_id).catch((err) =>
+          console.warn('[broadcastsurvey] jurnal:', (err as Error).message)
+        );
+      }
     } catch (e) {
       fail++;
       const kind = classifyBroadcastSendError(e);

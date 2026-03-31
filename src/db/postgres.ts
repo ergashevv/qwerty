@@ -306,6 +306,20 @@ export async function initPostgresSchema(): Promise<void> {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS survey_broadcast_sent (
+      id BIGSERIAL PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      telegram_id BIGINT NOT NULL,
+      message_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_survey_broadcast_sent_campaign
+    ON survey_broadcast_sent (campaign_id, created_at DESC)
+  `);
 }
 
 export async function withPgClient<T>(fn: (c: PoolClient) => Promise<T>): Promise<T | null> {

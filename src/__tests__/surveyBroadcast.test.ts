@@ -13,6 +13,7 @@ jest.mock('../db/surveyBroadcast', () => ({
   clearSurveyProblemPending: jest.fn(),
   setSurveyProblemPending: jest.fn(),
   getSurveyRecipientIds: jest.fn(),
+  insertSurveySentMessage: jest.fn().mockResolvedValue(undefined),
 }));
 
 import {
@@ -27,6 +28,7 @@ import {
   clearSurveyProblemPending,
   setSurveyProblemPending,
   getSurveyRecipientIds,
+  insertSurveySentMessage,
 } from '../db/surveyBroadcast';
 
 describe('handleSurveyCallback — inline tugmalar', () => {
@@ -36,12 +38,18 @@ describe('handleSurveyCallback — inline tugmalar', () => {
 
   function baseCtx(over: Record<string, unknown> = {}) {
     return {
-      callbackQuery: { data: 'svy:y:abc123dead456' },
+      callbackQuery: {
+        data: 'svy:y:abc123dead456',
+        message: { chat: { id: 999 }, message_id: 42 },
+      },
       from: { id: 999 },
       answerCallbackQuery: jest.fn().mockResolvedValue(undefined),
       reply: jest.fn().mockResolvedValue(undefined),
-      editMessageReplyMarkup: jest.fn().mockResolvedValue(undefined),
-      editMessageText: jest.fn().mockResolvedValue(undefined),
+      api: {
+        editMessageReplyMarkup: jest.fn().mockResolvedValue(undefined),
+        sendMessage: jest.fn().mockResolvedValue(undefined),
+        editMessageText: jest.fn().mockResolvedValue(undefined),
+      },
       ...over,
     };
   }
@@ -54,8 +62,11 @@ describe('handleSurveyCallback — inline tugmalar', () => {
     expect(ctx.answerCallbackQuery).toHaveBeenCalled();
     expect(insertSurveySatisfied).toHaveBeenCalledWith('abc123dead456', 999, true, null);
     expect(clearSurveyProblemPending).toHaveBeenCalledWith(999);
-    expect(ctx.editMessageReplyMarkup).toHaveBeenCalledWith({ reply_markup: { inline_keyboard: [] } });
-    expect(ctx.reply).toHaveBeenCalledWith(
+    expect(ctx.api.editMessageReplyMarkup).toHaveBeenCalledWith(999, 42, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(ctx.api.sendMessage).toHaveBeenCalledWith(
+      999,
       expect.stringContaining("Kinova siz bilan o'smoqda"),
       expect.objectContaining({ parse_mode: 'HTML' })
     );
@@ -66,20 +77,29 @@ describe('handleSurveyCallback — inline tugmalar', () => {
     const ctx = baseCtx();
     await handleSurveyCallback(ctx as never);
 
-    expect(ctx.reply).toHaveBeenCalledWith('Siz allaqachon javob bergansiz.');
-    expect(ctx.editMessageReplyMarkup).not.toHaveBeenCalled();
+    expect(ctx.api.sendMessage).toHaveBeenCalledWith(
+      999,
+      'Siz allaqachon javob bergansiz.',
+      expect.any(Object)
+    );
+    expect(ctx.api.editMessageReplyMarkup).not.toHaveBeenCalled();
   });
 
   it('Yo‘q (svy:n) → pending + xabarni tahrirlash', async () => {
     (setSurveyProblemPending as jest.Mock).mockResolvedValue(undefined);
     const ctx = baseCtx({
-      callbackQuery: { data: 'svy:n:campaign999zzz' },
+      callbackQuery: {
+        data: 'svy:n:campaign999zzz',
+        message: { chat: { id: 999 }, message_id: 42 },
+      },
     });
     await handleSurveyCallback(ctx as never);
 
     expect(setSurveyProblemPending).toHaveBeenCalledWith(999, 'campaign999zzz');
     expect(ctx.answerCallbackQuery).toHaveBeenCalled();
-    expect(ctx.editMessageText).toHaveBeenCalledWith(
+    expect(ctx.api.editMessageText).toHaveBeenCalledWith(
+      999,
+      42,
       expect.stringContaining('belgiladingiz'),
       expect.objectContaining({ parse_mode: 'HTML' })
     );
@@ -131,6 +151,11 @@ describe('runSurveyBroadcast — barcha qabul qiluvchilarga', () => {
       String(c[2]).includes('Muvaffaq')
     );
     expect(summaryCalls.length).toBeGreaterThanOrEqual(1);
+
+    expect(insertSurveySentMessage).toHaveBeenCalledTimes(ids.length);
+    for (const id of ids) {
+      expect(insertSurveySentMessage).toHaveBeenCalledWith(expect.any(String), id, 1);
+    }
   });
 
   it('SURVEY_BROADCAST_MAX_RECIPIENTS — faqat boshidagi N tagacha', async () => {

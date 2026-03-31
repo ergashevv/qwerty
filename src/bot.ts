@@ -18,6 +18,7 @@ import {
   buildDonateBroadcastConfirmKeyboard,
   handleDonateBroadcastConfirm,
   handleSurveyCallback,
+  runSurveyDeleteCampaign,
 } from './handlers/surveyBroadcast';
 import { isAdminTelegram } from './utils/isAdmin';
 
@@ -109,6 +110,17 @@ async function bootstrap(): Promise<void> {
         `▶️ O'zbek tilida tomosha qilish havolalari`,
       { parse_mode: 'HTML' }
     );
+  });
+
+  /** Yuborilgan so‘rovnoma xabarlarini o‘chirish (jurnalda `message_id` bo‘lsa) */
+  bot.command('surveydelete', async (ctx) => {
+    if (!isAdminTelegram(ctx.from?.id)) {
+      await ctx.reply('⛔ Bu buyruq faqat admin uchun.');
+      return;
+    }
+    const raw = ctx.message?.text ?? '';
+    const arg = raw.replace(/^\/surveydelete(@\w+)?\s*/i, '').trim();
+    await runSurveyDeleteCampaign(ctx, arg || null);
   });
 
   bot.command('donate', async (ctx) => {
