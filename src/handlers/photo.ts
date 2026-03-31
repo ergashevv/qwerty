@@ -287,9 +287,17 @@ const TELEGRAM_CAPTION_MAX = 1024;
 /** Inline tugma `url` — Telegram cheklovi. */
 const INLINE_KEYBOARD_URL_MAX = 2048;
 
+/** Tomosha havolalari captionda takrorlanmaydi (tugmalar bor); forward / Ulashish uchun eslatma. */
+const CAPTION_FORWARD_HINT_HTML =
+  '<i>Poster va barcha havolalar: chatdagi yuqoridagi xabarni forward qiling.</i>\n' +
+  '<i>«Ulashish» matn va havolani yuboradi (rasm yo‘q); rasm uchun shu xabarni forward qiling.</i>';
+
+/** `t.me/share/url` matnida — minimal fallbackda ham qolishi kerak. */
+const SHARE_FORWARD_HINT = 'Poster va barcha havolalar: chatdagi yuqoridagi xabarni forward qiling.';
+
 /**
  * Telegramning o‘z ulashish oynasi (`t.me/share/url`) — yangi bot xabari emas.
- * Poster chatdagi yuqoridagi xabarda; bu yerda matn + bot havolasi.
+ * Rasm faqat chatdagi asosiy xabarni forward qilganda ketadi; bu yerda matn + havolalar.
  */
 export function buildTelegramShareUrl(details: MovieDetails, botUsername: string): string | null {
   const u = botUsername.replace(/^@/, '').trim();
@@ -321,7 +329,7 @@ export function buildTelegramShareUrl(details: MovieDetails, botUsername: string
       lines.push(`• Google: ${gUrl}`);
     }
     lines.push('');
-    lines.push(`Poster va barcha havolalar: chatdagi yuqoridagi xabarni forward qiling.`);
+    lines.push(SHARE_FORWARD_HINT);
     return lines.join('\n');
   };
 
@@ -340,31 +348,17 @@ export function buildTelegramShareUrl(details: MovieDetails, botUsername: string
     }
   }
 
-  const minimal = `🎬 ${mainTitle.slice(0, 200)}\n\nKinova: ${botLink}`;
-  const fallback = `https://t.me/share/url?url=${encodeURIComponent(botLink)}&text=${encodeURIComponent(minimal)}`;
-  return fallback.length <= INLINE_KEYBOARD_URL_MAX ? fallback : null;
+  for (let maxTitle = 200; maxTitle >= 20; maxTitle -= 20) {
+    const minimal = `🎬 ${mainTitle.slice(0, maxTitle)}\n\n${SHARE_FORWARD_HINT}`;
+    const fallback = `https://t.me/share/url?url=${encodeURIComponent(botLink)}&text=${encodeURIComponent(minimal)}`;
+    if (fallback.length <= INLINE_KEYBOARD_URL_MAX) return fallback;
+  }
+
+  const hintOnly = `https://t.me/share/url?url=${encodeURIComponent(botLink)}&text=${encodeURIComponent(SHARE_FORWARD_HINT)}`;
+  return hintOnly.length <= INLINE_KEYBOARD_URL_MAX ? hintOnly : null;
 }
 
-/** Asosiy natija caption — `MovieDetails` dan (inline tugmalar bilan bir xil havolalar). */
-export function buildWatchLinksCaptionHtml(details: MovieDetails): string {
-  const lines: string[] = [];
-  for (const link of details.watchLinks.slice(0, 4)) {
-    lines.push(`• <a href="${escHtml(link.link)}">▶️ ${escHtml(link.source)}</a>`);
-  }
-  if (details.imdbUrl) {
-    lines.push(`• <a href="${escHtml(details.imdbUrl)}">🌐 IMDb</a>`);
-  }
-  const q =
-    (details.originalTitle && details.originalTitle.trim()) ||
-    details.title ||
-    details.uzTitle;
-  const gUrl = `https://www.google.com/search?q=${encodeURIComponent(q + ' uzbek tilida')}`;
-  lines.push(`• <a href="${escHtml(gUrl)}">🔍 Google'da qidirish</a>`);
-  if (lines.length === 0) return '';
-  return `\n\n🔗 <b>Tomosha havolalari</b>\n` + lines.join('\n');
-}
-
-function buildMovieResultCaption(
+export function buildMovieResultCaption(
   details: MovieDetails,
   opts?: { confidence?: string | null }
 ): string {
@@ -377,7 +371,7 @@ function buildMovieResultCaption(
   const ratingLine = details.rating !== 'N/A' ? ` | ⭐ ${details.rating}/10` : '';
   const confidenceLine =
     opts?.confidence === 'medium' ? `\n\n<i>🤖 AI taklifi — noto'g'ri bo'lishi mumkin.</i>` : '';
-  const linksBlock = buildWatchLinksCaptionHtml(details);
+  const forwardHint = `\n\n${CAPTION_FORWARD_HINT_HTML}`;
 
   const buildWithPlotLimit = (plotLimit: number) => {
     const plotPart =
@@ -390,7 +384,7 @@ function buildMovieResultCaption(
       ``,
       `📖 ${escHtml(plotPart)}`,
       confidenceLine,
-      linksBlock,
+      forwardHint,
     ]
       .filter(Boolean)
       .join('\n');
