@@ -1,7 +1,7 @@
 /**
  * Film kesh: canonical kalitlar, keshdan MovieDetails qurish, DB bilan integratsiya (ixtiyoriy).
  */
-import { canonicalCacheKey, isCanonicalCacheKey } from '../db/filmCacheKeys';
+
 import { movieDetailsFromCache } from '../services/movieService';
 import type { MovieCacheEntry } from '../db';
 import {
@@ -12,29 +12,7 @@ import {
   closePostgresPool,
 } from '../db';
 
-describe('canonicalCacheKey', () => {
-  test('bir xil film uchun barqaror string', () => {
-    expect(canonicalCacheKey(550, 'movie')).toBe('tmdb:550:movie');
-    expect(canonicalCacheKey(1396, 'tv')).toBe('tmdb:1396:tv');
-  });
 
-  test('title hash bilan adashmaydi', () => {
-    const titleKey = 'a'.repeat(32);
-    expect(canonicalCacheKey(550, 'movie')).not.toBe(titleKey);
-  });
-});
-
-describe('isCanonicalCacheKey', () => {
-  test('to‘g‘ri format', () => {
-    expect(isCanonicalCacheKey('tmdb:550:movie')).toBe(true);
-    expect(isCanonicalCacheKey('tmdb:1:tv')).toBe(true);
-  });
-
-  test('noto‘g‘ri', () => {
-    expect(isCanonicalCacheKey('deadbeef')).toBe(false);
-    expect(isCanonicalCacheKey('tmdb:abc:movie')).toBe(false);
-  });
-});
 
 describe('movieDetailsFromCache', () => {
   test('kesh qatoridan MovieDetails to‘ldiriladi', () => {
@@ -71,7 +49,7 @@ const hasDb = !!process.env.DATABASE_URL;
     await closePostgresPool();
   });
 
-  test('setCache TMDB bilan ikkala kalitda yozadi va getCachedByTmdb o‘qiydi', async () => {
+  test('setCache TMDB bilan bitta kalitda (title hash) yozadi va getCachedByTmdb o‘qiydi', async () => {
     await initPostgresSchema();
     const suffix = `test-${Date.now()}`;
     const title = `Canonical Cache Film ${suffix}`;

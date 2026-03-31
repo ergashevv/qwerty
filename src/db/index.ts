@@ -438,4 +438,3 @@ export async function getInstagramSourceStats(limit = 15): Promise<{ account: st
 
 export { getPostgresPool, initPostgresSchema, closePostgresPool } from './postgres';
 export { insertFilmPhotoEvidence } from './filmEvidence';
-export { canonicalCacheKey, isCanonicalCacheKey } from './filmCacheKeys';

@@ -289,6 +289,10 @@ describe('Text handler — darhol "Qidirilmoqda..." xabari', () => {
       buildWatchKeyboard: jest.fn(() => []),
       sendMovieResult: jest.fn(async () => {}),
     }));
+    jest.mock('../db/surveyBroadcast', () => ({
+      getSurveyProblemPending: jest.fn(async () => null),
+      completeSurveyProblemText: jest.fn(async () => true),
+    }));
 
     const replyMock = jest.fn(async () => {
       callOrder.push('reply:Qidirilmoqda');
@@ -348,5 +352,25 @@ describe('Bot config — drop_pending_updates va callback handler order', () => 
     const donateIdx = content.indexOf('bot.callbackQuery(/^donate:/');
     const seqIdx    = content.indexOf('bot.use(sequentialize');
     expect(donateIdx).toBeLessThan(seqIdx);
+  });
+
+  test('so‘rovnoma (svy) callback handleri ham sequentialize dan OLDIN joylashgan', async () => {
+    const fs = await import('fs');
+    const content = fs.readFileSync('src/bot.ts', 'utf-8');
+    const svyIdx = content.indexOf('bot.callbackQuery(/^svy:/');
+    const seqIdx = content.indexOf('bot.use(sequentialize');
+    expect(svyIdx).toBeGreaterThan(0);
+    expect(svyIdx).toBeLessThan(seqIdx);
+  });
+
+  test('/donate tasdiq (dbc) callback ham sequentialize dan OLDIN', async () => {
+    const fs = await import('fs');
+    const content = fs.readFileSync('src/bot.ts', 'utf-8');
+    const dbcIdx = content.indexOf('bot.callbackQuery(/^dbc:/');
+    const seqIdx = content.indexOf('bot.use(sequentialize');
+    expect(dbcIdx).toBeGreaterThan(0);
+    expect(dbcIdx).toBeLessThan(seqIdx);
+    expect(content).toContain("bot.command('donate'");
+    expect(content).not.toContain("broadcastsurvey");
   });
 });

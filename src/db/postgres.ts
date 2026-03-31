@@ -105,12 +105,10 @@ export async function initPostgresSchema(): Promise<void> {
     WHERE tmdb_id IS NOT NULL
   `);
   /**
-   * Eski dual-write: cache_key = 'tmdb:ID:movie|tv' — title qatori bilan bir xil ma’lumot,
-   * dashboardda dublikat. Bir marta olib tashlanadi.
+   * Eski dual-write: cache_key = 'tmdb:ID:movie|tv' — title qatori bilan bir xil ma’lumot.
+   * Endi TMDB lookup ustun orqali (idx_movie_cache_tmdb_lookup), shuning uchun ortiqcha.
    */
-  await p.query(`
-    DELETE FROM movie_cache WHERE cache_key ~ '^tmdb:[0-9]+:(movie|tv)$'
-  `);
+  await p.query(`DELETE FROM movie_cache WHERE cache_key LIKE 'tmdb:%'`);
 
   await p.query(`
     CREATE TABLE IF NOT EXISTS film_photo_evidence (
@@ -283,6 +281,30 @@ export async function initPostgresSchema(): Promise<void> {
       ALTER TABLE users ADD COLUMN blocked_at TIMESTAMPTZ NULL;
     EXCEPTION WHEN duplicate_column THEN NULL;
     END $$
+  `);
+
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS survey_broadcast_responses (
+      id BIGSERIAL PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      telegram_user_id BIGINT NOT NULL,
+      satisfied BOOLEAN NOT NULL,
+      problem_text TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (telegram_user_id, campaign_id)
+    )
+  `);
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_survey_broadcast_campaign
+    ON survey_broadcast_responses (campaign_id, created_at DESC)
+  `);
+
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS survey_problem_pending (
+      telegram_id BIGINT PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
   `);
 }
 

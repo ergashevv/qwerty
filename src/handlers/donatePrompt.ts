@@ -108,6 +108,25 @@ export async function maybeDonateAfterFeedbackYes(ctx: Context): Promise<void> {
   await markDonatePromptShown(uid, 'feedback', next);
 }
 
+/** So‘rovnoma / boshqa joydan — milestone hisoblamasdan, faqat ma’lumot. */
+export async function replyWithDonateInfo(ctx: Context): Promise<void> {
+  const cfg = getDonateConfig();
+  if (!cfg.enabled) {
+    await ctx.reply('Rahmat! ❤️ Tanlovingiz va fikringiz uchun minnatdormiz.', {
+      link_preview_options: { is_disabled: true },
+    });
+    return;
+  }
+  const text = buildDonateMessage(cfg);
+  await ctx.reply(text, {
+    parse_mode: 'HTML',
+    link_preview_options: { is_disabled: true },
+    reply_markup: {
+      inline_keyboard: [[{ text: '✖️ Endi ko‘rsatmasin', callback_data: 'donate:dismiss' }]],
+    },
+  });
+}
+
 export async function handleDonateCallback(ctx: Context): Promise<void> {
   const cq = ctx.callbackQuery;
   const data = cq?.data;

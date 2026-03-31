@@ -22,6 +22,7 @@ import { extractInstagramReelUrl } from '../services/reelsUrl';
 import { handleInstagramReelUrl } from './reels';
 import { STATUS_DETAILS_LINES, withRotatingStatus } from './rotatingStatus';
 import { setUserTextContext } from '../services/userContext';
+import { completeSurveyProblemText, getSurveyProblemPending } from '../db/surveyBroadcast';
 
 export async function handleText(ctx: Context): Promise<void> {
   const text = ctx.message?.text?.trim();
@@ -29,6 +30,21 @@ export async function handleText(ctx: Context): Promise<void> {
 
   const userId = ctx.from?.id;
   if (!userId) return;
+
+  const surveyPending = await getSurveyProblemPending(userId);
+  if (surveyPending) {
+    await upsertUser(userId, ctx.from?.username, ctx.from?.first_name);
+    await recordUserActivityDay(userId);
+    const saved = await completeSurveyProblemText(
+      userId,
+      surveyPending.campaignId,
+      text.slice(0, 4000)
+    );
+    if (saved) {
+      await ctx.reply('Rahmat! Yozganingiz qabul qilindi. ❤️');
+    }
+    return;
+  }
 
   await upsertUser(userId, ctx.from?.username, ctx.from?.first_name);
   await recordUserActivityDay(userId);

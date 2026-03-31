@@ -14,6 +14,12 @@ import {
 import { getPostgresPool, initPostgresSchema, pingPostgres, runAnalyticsRetention } from './db/postgres';
 import { handleIdentificationFeedback } from './handlers/feedback';
 import { handleDonateCallback } from './handlers/donatePrompt';
+import {
+  buildDonateBroadcastConfirmKeyboard,
+  handleDonateBroadcastConfirm,
+  handleSurveyCallback,
+} from './handlers/surveyBroadcast';
+import { isAdminTelegram } from './utils/isAdmin';
 
 const _botToken = process.env.BOT_TOKEN;
 if (!_botToken) {
@@ -54,8 +60,17 @@ async function bootstrap(): Promise<void> {
     await handleIdentificationFeedback(ctx);
   });
 
-  bot.use(sequentialize((ctx) => ctx.from?.id?.toString() ?? 'unknown'));
+  bot.callbackQuery(/^svy:/, async (ctx) => {
+    await handleSurveyCallback(ctx);
+  });
 
+  bot.callbackQuery(/^dbc:/, async (ctx) => {
+    await handleDonateBroadcastConfirm(ctx);
+  });
+
+  /**
+   * Buyruqlar sequentialize dan OLDIN — uzoq foto/matn qidiruvi tugamasidan /donate va /stats ishlaydi.
+   */
   bot.command('start', async (ctx) => {
     const uid = ctx.from?.id;
     if (uid) {
@@ -96,9 +111,30 @@ async function bootstrap(): Promise<void> {
     );
   });
 
+  bot.command('donate', async (ctx) => {
+    if (!process.env.ADMIN_TELEGRAM_ID?.trim()) {
+      await ctx.reply('⚙️ ADMIN_TELEGRAM_ID .env da yo‘q — buyruq ishlamaydi.');
+      return;
+    }
+    if (!isAdminTelegram(ctx.from?.id)) {
+      await ctx.reply(
+        '⛔ Bu buyruq faqat admin uchun.\n\n' +
+          'Sizning Telegram ID `.env` dagi ADMIN_TELEGRAM_ID bilan mos kelmayapti (vergul bilan bir nechta ID ham yozish mumkin).'
+      );
+      return;
+    }
+    await ctx.reply(
+      'Rostan <b>barcha</b> foydalanuvchilarga so‘rovnoma xabarini yubormoqchimisan?',
+      {
+        parse_mode: 'HTML',
+        reply_markup: buildDonateBroadcastConfirmKeyboard(),
+      }
+    );
+  });
+
   bot.command('stats', async (ctx) => {
-    const adminId = process.env.ADMIN_TELEGRAM_ID;
-    if (adminId && ctx.from?.id.toString() !== adminId) return;
+    const adminId = process.env.ADMIN_TELEGRAM_ID?.trim();
+    if (adminId && !isAdminTelegram(ctx.from?.id)) return;
 
     try {
       const [aud, fb, blockedRes] = await Promise.all([
@@ -127,6 +163,8 @@ async function bootstrap(): Promise<void> {
       await ctx.reply('Statistika olishda xatolik.');
     }
   });
+
+  bot.use(sequentialize((ctx) => ctx.from?.id?.toString() ?? 'unknown'));
 
   bot.on('my_chat_member', async (ctx) => {
     const uid = ctx.from?.id;
