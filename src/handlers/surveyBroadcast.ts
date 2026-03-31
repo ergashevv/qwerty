@@ -43,14 +43,22 @@ export async function runSurveyDeleteCampaign(ctx: Context, campaignIdArg: strin
     (await getLatestCampaignIdFromSent());
   if (!cid) {
     await ctx.reply(
-      'Bazada yuborilgan xabarlar jurnali bo‘sh.\n\n' +
-        'Eski yuborishlar uchun `message_id` saqlanmagan — faqat yangi versiyadan keyin yuborilgan xabarni o‘chirish mumkin.'
+      'Bazada <code>survey_broadcast_sent</code> jurnali bo‘sh — oxirgi kampaniya uchun ham <code>message_id</code> yo‘q.\n\n' +
+        '<b>Nima qilish kerak</b>\n' +
+        '1) VPS da yangi kod deploy bo‘lganini va <code>pm2 restart</code> qilinganini tekshiring (jurnal faqat shu versiyadan keyin yuborilgan mass xabarlarda yoziladi).\n' +
+        '2) <code>.env</code> da <code>DATABASE_URL</code> shu bot bazasiga ulanganini tekshiring.\n\n' +
+        '<b>Eski kampaniya</b> (masalan, jurnal yo‘q paytda yuborilgan) xabarlarini bot orqali ommaviy o‘chirib bo‘lmaydi — Telegram har bir chat uchun alohida <code>message_id</code> beradi va bizda saqlanmagan.',
+      { parse_mode: 'HTML' }
     );
     return;
   }
   const rows = await listSurveySentMessages(cid);
   if (rows.length === 0) {
-    await ctx.reply(`Kampaniya <code>${cid}</code> uchun jurnal topilmadi.`, { parse_mode: 'HTML' });
+    await ctx.reply(
+      `Kampaniya <code>${cid}</code> uchun jurnal qatorlari yo‘q.\n\n` +
+        `Bu kampaniya jurnal qo‘shilguncha yuborilgan bo‘lishi yoki boshqa bazaga yozilgan bo‘lishi mumkin. Mass <code>deleteMessage</code> uchun jadvalda <code>telegram_id</code> + <code>message_id</code> bo‘lishi kerak.`,
+      { parse_mode: 'HTML' }
+    );
     return;
   }
   await ctx.reply(

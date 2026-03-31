@@ -40,6 +40,11 @@ async function bootstrap(): Promise<void> {
     await pruneUserActivityHistory();
     if (await pingPostgres()) console.log('✅ Postgres tayyor');
     await runAnalyticsRetention();
+    if (!process.env.ADMIN_TELEGRAM_ID?.trim()) {
+      console.warn(
+        '⚠️ ADMIN_TELEGRAM_ID .env da yo‘q — /donate ishlamaydi; admin buyruqlar ID bilan tekshirilmaydi. VPS da qo‘shib pm2 restart qiling.'
+      );
+    }
   } catch (e) {
     console.error('❌ Postgres:', (e as Error).message);
     process.exit(1);
