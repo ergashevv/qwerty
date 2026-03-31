@@ -3,12 +3,7 @@
  */
 
 /** `/feedback` dan keyin — keyingi matn shikoyat sifatida ketadi */
-export const FEEDBACK_WRITE_NEXT_HTML =
-  `✍️ <b>Shikoyatingizni yozing</b>\n\n` +
-  `Keyingi <b>bitta</b> matn xabaringiz jamoamizga yetadi.\n\n` +
-  `• <code>/cancel</code> — bekor qilish\n` +
-  `• Natijada <b>Ha</b> / <b>Yo‘q</b> tugmalari ham model uchun ishlatiladi; ` +
-  `<b>Yo‘q</b> bosganda ham shu tartibda shikoyat yozishingiz mumkin.`;
+export const FEEDBACK_WRITE_NEXT_HTML = `✍️ <b>Shikoyatingizni yozing</b>`;
 
 /** `/feedback` — allaqachon navbatda */
 export const FEEDBACK_PENDING_REMINDER_HTML =
