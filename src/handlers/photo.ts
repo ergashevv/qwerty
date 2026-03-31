@@ -37,6 +37,7 @@ import { maybeDonateAfterSuccess } from './donatePrompt';
 import { ackTyping, safeEditOrNotify } from '../utils/safeTelegram';
 import { getProblemReportPending } from '../db/feedbackProblemReport';
 import { tryCompleteProblemReport } from './problemReportSubmit';
+import { feedbackModeReplyMarkup } from './feedbackModeBack';
 import { PROBLEM_REPORT_PHOTO_NEED_CAPTION_HTML } from '../messages/feedback';
 
 export async function handlePhoto(ctx: Context): Promise<void> {
@@ -52,9 +53,19 @@ export async function handlePhoto(ctx: Context): Promise<void> {
   if (await getProblemReportPending(userId)) {
     const captionForReport = ctx.message?.caption?.trim() ?? '';
     if (captionForReport.length > 0) {
-      await tryCompleteProblemReport(ctx, userId, captionForReport);
+      const photos = ctx.message?.photo;
+      const largest = photos?.length ? photos[photos.length - 1] : undefined;
+      const doc = ctx.message?.document;
+      const docImageId =
+        doc?.mime_type?.startsWith('image/') && doc.file_id ? doc.file_id : undefined;
+      await tryCompleteProblemReport(ctx, userId, captionForReport, {
+        photoFileId: largest?.file_id ?? docImageId,
+      });
     } else {
-      await ctx.reply(PROBLEM_REPORT_PHOTO_NEED_CAPTION_HTML, { parse_mode: 'HTML' });
+      await ctx.reply(PROBLEM_REPORT_PHOTO_NEED_CAPTION_HTML, {
+        parse_mode: 'HTML',
+        reply_markup: feedbackModeReplyMarkup(),
+      });
     }
     return;
   }

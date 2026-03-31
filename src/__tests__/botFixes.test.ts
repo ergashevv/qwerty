@@ -298,7 +298,7 @@ describe('Text handler — darhol "Qidirilmoqda..." xabari', () => {
       completeSurveyProblemText: jest.fn(async () => true),
     }));
     jest.mock('../handlers/problemReportSubmit', () => ({
-      tryCompleteProblemReport: jest.fn(async () => false),
+      tryCompleteProblemReport: jest.fn(async () => 'none'),
     }));
 
     const replyMock = jest.fn(async () => {

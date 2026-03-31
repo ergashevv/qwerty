@@ -56,8 +56,7 @@ export async function handleText(ctx: Context): Promise<void> {
     return;
   }
 
-  /** Shikoyat matni slash bilan boshlangan bo‘lsa ham qabul qilinadi (/ dan oldin tekshirilmaydi). */
-  if (await tryCompleteProblemReport(ctx, userId, text)) {
+  if ((await tryCompleteProblemReport(ctx, userId, text)) !== 'none') {
     return;
   }
 

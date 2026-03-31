@@ -10,6 +10,8 @@ import {
 } from '../db/feedbackProblemReport';
 import { tryBuildFeedbackThumbB64 } from '../services/feedbackThumb';
 import { maybeDonateAfterFeedbackYes } from './donatePrompt';
+import { feedbackModeReplyMarkup } from './feedbackModeBack';
+import { PROBLEM_REPORT_AFTER_NO_HTML } from '../messages/feedback';
 import { safeReply } from '../utils/safeTelegram';
 
 const PREFIX = 'fb:';
@@ -126,19 +128,9 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
       source: row.source,
     });
 
-    const sourceHint =
-      row.source === 'photo'
-        ? '📸 Boshqa kadr yoki aniqroq sahna bilan sinab ko‘ring — yoki\n'
-        : '';
-
-    await safeReply(
-      ctx,
-      sourceHint +
-        '💬 <b>Shikoyat yozing</b>\n\n' +
-        'Keyingi <b>bitta</b> matn xabaringiz shikoyat sifatida jamoamizga yetadi. ' +
-        'Rasm yuborsangiz, izohni caption qilib yozing.\n\n' +
-        '<i>Bekor qilish: /cancel · Yordam: /feedback</i>',
-      { parse_mode: 'HTML' }
-    );
+    await safeReply(ctx, PROBLEM_REPORT_AFTER_NO_HTML, {
+      parse_mode: 'HTML',
+      reply_markup: feedbackModeReplyMarkup(),
+    });
   }
 }

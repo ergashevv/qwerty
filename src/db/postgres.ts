@@ -2,6 +2,42 @@ import { Pool, PoolClient } from 'pg';
 
 let pool: Pool | null = null;
 
+const PG_RETRY_ATTEMPTS = Math.max(1, Math.min(5, Number(process.env.PG_QUERY_RETRY_ATTEMPTS || 3)));
+const PG_RETRY_BASE_MS = Math.max(50, Number(process.env.PG_QUERY_RETRY_BASE_MS || 200));
+
+function isTransientPgError(e: unknown): boolean {
+  const msg = String((e as Error)?.message ?? e);
+  if (/Connection terminated|ECONNRESET|EPIPE|ETIMEDOUT|connection timeout|Connection closed/i.test(msg)) {
+    return true;
+  }
+  const code = (e as { code?: string })?.code;
+  if (code === 'ECONNRESET' || code === 'ETIMEDOUT' || code === 'EPIPE') return true;
+  return false;
+}
+
+/**
+ * Neon / tarmoq: uzoq idle yoki uzilishdan keyin birinchi so‘rov ba’zan yiqiladi — qayta urinib yangi ulanish olinadi.
+ */
+export async function withPgRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let last: unknown;
+  for (let attempt = 1; attempt <= PG_RETRY_ATTEMPTS; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      last = e;
+      if (!isTransientPgError(e) || attempt === PG_RETRY_ATTEMPTS) throw e;
+      await new Promise((r) => setTimeout(r, PG_RETRY_BASE_MS * attempt));
+    }
+  }
+  throw last;
+}
+
+function wrapPoolQueryWithRetry(p: Pool): void {
+  const original = p.query.bind(p) as (...args: unknown[]) => Promise<unknown>;
+  (p as { query: typeof original }).query = (...args: unknown[]) =>
+    withPgRetry(() => original(...args));
+}
+
 /** Bitta manba: Neon Postgres. DATABASE_URL bo‘lmasa ishlamaydi. */
 export function getPostgresPool(): Pool {
   const url = process.env.DATABASE_URL?.trim();
@@ -12,10 +48,13 @@ export function getPostgresPool(): Pool {
     pool = new Pool({
       connectionString: url,
       max: Number(process.env.PG_POOL_MAX || 10),
-      idleTimeoutMillis: 20_000,
-      connectionTimeoutMillis: 15_000,
+      /** Server tomonida idle yopilishidan oldin klient ulanishni yangilash */
+      idleTimeoutMillis: 10_000,
+      connectionTimeoutMillis: 30_000,
+      keepAlive: true,
     });
     pool.on('error', (err) => console.error('Postgres pool xato:', err.message));
+    wrapPoolQueryWithRetry(pool);
   }
   return pool;
 }
@@ -339,6 +378,13 @@ export async function initPostgresSchema(): Promise<void> {
   await p.query(`
     CREATE INDEX IF NOT EXISTS idx_identification_problem_reports_user
     ON identification_problem_reports (telegram_user_id, created_at DESC)
+  `);
+
+  await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE identification_problem_reports ADD COLUMN photo_file_id TEXT NULL;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
   `);
 
   await p.query(`

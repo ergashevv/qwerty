@@ -14,6 +14,7 @@ import {
 import { getPostgresPool, initPostgresSchema, pingPostgres, runAnalyticsRetention } from './db/postgres';
 import { handleIdentificationFeedback } from './handlers/feedback';
 import { handleShareCard } from './handlers/shareCard';
+import { feedbackModeReplyMarkup, handleFeedbackModeBack } from './handlers/feedbackModeBack';
 import { handleDonateCallback } from './handlers/donatePrompt';
 import {
   buildDonateBroadcastConfirmKeyboard,
@@ -33,8 +34,10 @@ import {
   FEEDBACK_CANCEL_NOTHING_HTML,
   FEEDBACK_CANCEL_OK_HTML,
   FEEDBACK_PENDING_REMINDER_HTML,
+  FEEDBACK_WRONG_MEDIA_HTML,
   FEEDBACK_WRITE_NEXT_HTML,
 } from './messages/feedback';
+import { handleProblemReportUnsupportedMedia } from './handlers/problemReportWrongMedia';
 
 const _botToken = process.env.BOT_TOKEN;
 if (!_botToken) {
@@ -77,6 +80,10 @@ async function bootstrap(): Promise<void> {
    */
   bot.callbackQuery(/^donate:/, async (ctx) => {
     await handleDonateCallback(ctx);
+  });
+
+  bot.callbackQuery(/^fbc:/, async (ctx) => {
+    await handleFeedbackModeBack(ctx);
   });
 
   bot.callbackQuery(/^fb:/, async (ctx) => {
@@ -132,7 +139,7 @@ async function bootstrap(): Promise<void> {
         `📖 Qisqacha mazmun\n` +
         `▶️ Tomosha havolalari · 📤 Story uchun ulashish karti\n\n` +
         `<b>Fikr:</b> <b>✅ Ha, shu film</b> / <b>❌ Yo'q, bu emas</b>. ` +
-        `Shikoyat yozish: <code>/feedback</code> — keyingi matn xabaringiz jamoamizga yetadi.`,
+        `<code>/feedback</code> / <b>Yo‘q</b> — keyingi xabar qisqa shikoyat (qidiruv emas).`,
       { parse_mode: 'HTML' }
     );
   });
@@ -140,12 +147,13 @@ async function bootstrap(): Promise<void> {
   bot.command('feedback', async (ctx) => {
     const uid = ctx.from?.id;
     if (!uid) return;
+    const kb = { reply_markup: feedbackModeReplyMarkup() };
     if (await getProblemReportPending(uid)) {
-      await ctx.reply(FEEDBACK_PENDING_REMINDER_HTML, { parse_mode: 'HTML' });
+      await ctx.reply(FEEDBACK_PENDING_REMINDER_HTML, { parse_mode: 'HTML', ...kb });
       return;
     }
     await setFreeComplaintPending(uid);
-    await ctx.reply(FEEDBACK_WRITE_NEXT_HTML, { parse_mode: 'HTML' });
+    await ctx.reply(FEEDBACK_WRITE_NEXT_HTML, { parse_mode: 'HTML', ...kb });
   });
 
   bot.command('cancel', async (ctx) => {
@@ -252,6 +260,14 @@ async function bootstrap(): Promise<void> {
   messagePipeline.use(sequentialize((ctx) => ctx.from?.id?.toString() ?? 'unknown'));
   messagePipeline.on('message:photo', handlePhoto);
   messagePipeline.on('message:document', async (ctx) => {
+    const uid = ctx.from?.id;
+    if (uid && (await getProblemReportPending(uid))) {
+      const doc = ctx.message?.document;
+      if (!doc?.mime_type?.startsWith('image/')) {
+        await ctx.reply(FEEDBACK_WRONG_MEDIA_HTML, { parse_mode: 'HTML' });
+        return;
+      }
+    }
     const doc = ctx.message?.document;
     if (!doc?.mime_type?.startsWith('image/')) {
       await ctx.reply('📸 Iltimos, rasm yuboring (screenshot yoki foto).');
@@ -259,6 +275,24 @@ async function bootstrap(): Promise<void> {
     }
     await handlePhoto(ctx);
   });
+  /** Shikoyat rejimida matn/rasmdan boshqa tur */
+  messagePipeline.on(
+    [
+      'message:voice',
+      'message:video',
+      'message:video_note',
+      'message:animation',
+      'message:audio',
+      'message:sticker',
+      'message:poll',
+      'message:location',
+      'message:venue',
+      'message:contact',
+      'message:dice',
+      'message:game',
+    ],
+    handleProblemReportUnsupportedMedia
+  );
   messagePipeline.on('message:text', handleText);
   bot.use(messagePipeline);
 
