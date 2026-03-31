@@ -99,7 +99,7 @@ async function bootstrap(): Promise<void> {
     const name = ctx.from?.first_name || "Do'stim";
     await ctx.reply(
       `Assalomu alaykum, <b>${name}</b>! 🎬\n\n` +
-        `📸 Screenshot · 🔗 Reels · ✍️ matn — kadr yoki tavsifdan filmni topib, <b>o‘zbekcha</b> tomosha havolalarini beraman.\n\n` +
+        `📸 Screenshot · 🔗 Reels / YouTube · ✍️ matn — kadr yoki tavsifdan filmni topib, <b>o‘zbekcha</b> tomosha havolalarini beraman.\n\n` +
         `Har bir natijada pastda aynan shu ikkita tugma chiqadi:\n` +
         `<b>✅ Ha, shu film</b>     <b>❌ Yo'q, bu emas</b>\n\n` +
         `To‘g‘ri topilsa — chapdagi, yo‘q bo‘lsa — o‘ngdagi. Fikringiz botni yaxshilaydi. Batafsil: <code>/feedback</code> 🇺🇿`,
@@ -117,8 +117,8 @@ async function bootstrap(): Promise<void> {
         `• O'zbekcha: <code>Temir odam</code>\n` +
         `• Tavsif: <code>temir kostyumli qahramonli Marvel filmi</code>\n` +
         `• Aktyor: <code>Robert Downey Jr filmi</code>\n\n` +
-        `<b>Instagram Reels:</b>\n` +
-        `Reels havolasini xabar qilib yuboring. Limit: 2 ta / 6 soat (cheksiz ID lar bundan mustasno).\n\n` +
+        `<b>Video havola (Instagram / YouTube):</b>\n` +
+        `Reels yoki YouTube (trailer, Shorts) havolasini yuboring. Matn bilan birga ham bo‘lishi mumkin. Limit: 2 ta / 6 soat (cheksiz ID lar bundan mustasno).\n\n` +
         `<b>Natijada:</b>\n` +
         `🎬 Film nomi (o'zbekcha)\n` +
         `📖 Qisqacha mazmun\n` +

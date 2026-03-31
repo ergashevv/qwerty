@@ -14,3 +14,41 @@ export function extractInstagramReelUrl(text: string): string | null {
   }
   return `https://www.instagram.com/reel/${code}/`;
 }
+
+/** Birinchi http(s) havolasini olib tashlab, qolgan matnni izoh sifatida qaytaradi (matn + havola). */
+export function extractUserHintBesideFirstUrl(text: string): string | null {
+  const stripped = text
+    .trim()
+    .replace(/https?:\/\/[^\s]+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return stripped.length >= 2 ? stripped : null;
+}
+
+/**
+ * Matndan birinchi YouTube video havolasini ajratadi (watch, Shorts, youtu.be).
+ * Qaytarilgan URL yt-dlp uchun barqaror shaklda.
+ */
+export function extractYouTubeUrl(text: string): string | null {
+  const watch = text.match(/https?:\/\/(?:www\.|m\.)?youtube\.com\/watch\?[^\s]+/i);
+  if (watch) {
+    try {
+      const u = new URL(watch[0]);
+      const v = u.searchParams.get('v');
+      if (v && /^[A-Za-z0-9_-]{11}$/.test(v)) {
+        return `https://www.youtube.com/watch?v=${v}`;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  const short = text.match(/https?:\/\/youtu\.be\/([A-Za-z0-9_-]{11})(?:[^\s]*)?/i);
+  if (short) {
+    return `https://www.youtube.com/watch?v=${short[1]}`;
+  }
+  const shorts = text.match(/https?:\/\/(?:www\.|m\.)?youtube\.com\/shorts\/([A-Za-z0-9_-]{11})(?:[^\s]*)?/i);
+  if (shorts) {
+    return `https://www.youtube.com/shorts/${shorts[1]}`;
+  }
+  return null;
+}

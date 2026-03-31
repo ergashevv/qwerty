@@ -277,6 +277,7 @@ describe('Text handler — darhol "Qidirilmoqda..." xabari', () => {
     }));
     jest.mock('../services/reelsUrl', () => ({
       extractInstagramReelUrl: jest.fn(() => null),
+      extractYouTubeUrl: jest.fn(() => null),
     }));
     jest.mock('../handlers/rotatingStatus', () => ({
       STATUS_DETAILS_LINES: () => ['Loading...'],

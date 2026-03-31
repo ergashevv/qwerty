@@ -97,7 +97,9 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
           user_query_text: row.user_query_text ?? null,
           bot_reply_preview: row.bot_reply_preview ?? null,
         }
-      : {}),
+      : row.source === 'reels' && row.user_query_text
+        ? { user_query_text: row.user_query_text }
+        : {}),
   });
 
   if (correct) {

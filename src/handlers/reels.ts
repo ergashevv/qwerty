@@ -12,14 +12,55 @@ import {
   recordSearchRequest,
 } from '../db';
 import { insertPendingFeedback } from '../db/feedbackPending';
+import { buildBotReplyPreview } from '../utils/feedbackPreview';
 import { buildWatchKeyboard, sendMovieResult } from './photo';
 import { enqueueReelsJob } from '../services/reelsQueue';
 import { identifyMovieFromReelVideo } from '../services/reelsPipeline';
 import { REELS_LIMIT_PER_WINDOW, REELS_WINDOW_SECONDS } from '../config/limits';
 import { STATUS_DETAILS_LINES, STATUS_IDENTIFY_LINES, withRotatingStatus } from './rotatingStatus';
 import { safeEditOrNotify } from '../utils/safeTelegram';
+import { extractUserHintBesideFirstUrl } from '../services/reelsUrl';
 
-export async function handleInstagramReelUrl(ctx: Context, reelUrl: string): Promise<void> {
+export type VideoLinkPlatform = 'instagram' | 'youtube';
+
+const COPY: Record<
+  VideoLinkPlatform,
+  { check: string; download: string; fail: string; processErr: string }
+> = {
+  instagram: {
+    check: '🔍 Reels tekshirilmoqda...',
+    download: '📥 Instagram dan video olinmoqda...',
+    fail:
+      '❌ Bu Reels dan filmni aniqlay olmadim.\n\n' +
+      '• Instagram havolasi ochiq va to‘g‘ri ekanini tekshiring\n' +
+      '• Yoki shu sahna screenshot qilib yuboring\n' +
+      '• Yoki filmni qisqacha matn bilan tasvirlab yozing',
+    processErr:
+      '❌ Reels ni qayta ishlab bo‘lmadi (yuklash yoki Instagram cheklovi). Screenshot yoki matn bilan urinib ko‘ring.',
+  },
+  youtube: {
+    check: '🔍 YouTube havolasi tekshirilmoqda...',
+    download: '📥 YouTube dan video olinmoqda...',
+    fail:
+      '❌ Bu videodan filmni aniqlay olmadim.\n\n' +
+      '• YouTube havolasi ochiq va to‘g‘ri ekanini tekshiring\n' +
+      '• Yoki shu sahna screenshot qilib yuboring\n' +
+      '• Yoki filmni qisqacha matn bilan tasvirlab yozing',
+    processErr:
+      '❌ YouTube videoni qayta ishlab bo‘lmadi. Boshqa havola, screenshot yoki matn bilan urinib ko‘ring.',
+  },
+};
+
+export interface HandleVideoLinkOpts {
+  platform: VideoLinkPlatform;
+  /** Foydalanuvchi xabari — matn + havola bo‘lsa izoh identify ga uzatiladi va feedback da saqlanadi */
+  fullText?: string;
+}
+
+/**
+ * Instagram yoki YouTube havolasi: bir xil limit, yt-dlp + kadr + aniqlash.
+ */
+export async function handleVideoLink(ctx: Context, videoUrl: string, opts: HandleVideoLinkOpts): Promise<void> {
   const userId = ctx.from?.id;
   if (!userId) return;
 
@@ -27,7 +68,7 @@ export async function handleInstagramReelUrl(ctx: Context, reelUrl: string): Pro
   if (!reserved) {
     const h = Math.round(REELS_WINDOW_SECONDS / 3600);
     await ctx.reply(
-      `⚠️ Instagram Reels orqali film qidirish limiti tugadi.\n\n` +
+      `⚠️ Instagram / YouTube havolalari orqali film qidirish limiti tugadi.\n\n` +
         `<b>${REELS_LIMIT_PER_WINDOW}</b> ta urinish / <b>${h}</b> soat.\n` +
         `Keyingi urinishlar uchun biroz kuting yoki screenshot yuboring / matn bilan yozing.`,
       { parse_mode: 'HTML' }
@@ -37,40 +78,37 @@ export async function handleInstagramReelUrl(ctx: Context, reelUrl: string): Pro
 
   const chatId = ctx.chat!.id;
   let processing: { message_id: number } | undefined;
+  const c = COPY[opts.platform];
+  const hint = opts.fullText ? extractUserHintBesideFirstUrl(opts.fullText) : null;
+  const queryForFeedback = opts.fullText?.trim().slice(0, 4000) || null;
+
   try {
     await recordSearchRequest(userId, 'reels');
 
-    processing = await ctx.reply('🔍 Reels tekshirilmoqda...');
+    processing = await ctx.reply(c.check);
     const msgId = processing.message_id;
     void ctx.api.sendChatAction(chatId, 'typing');
 
     await ctx.api.editMessageText(
       chatId,
       msgId,
-      '⏳ Navbatda yoki yuklanmoqda (boshqa Reels ish tugaguncha kutadi)...'
+      '⏳ Navbatda yoki yuklanmoqda (boshqa video ish tugaguncha kutadi)...'
     );
 
     const identified = await enqueueReelsJob(async () => {
-      await ctx.api.editMessageText(chatId, msgId, '📥 Instagram dan video olinmoqda...');
+      await ctx.api.editMessageText(chatId, msgId, c.download);
       return withRotatingStatus(
         ctx,
         chatId,
         msgId,
         STATUS_IDENTIFY_LINES,
-        () => identifyMovieFromReelVideo(reelUrl),
+        () => identifyMovieFromReelVideo(videoUrl, hint),
         { intervalMs: 3000 }
       );
     });
 
     if (!identified) {
-      await ctx.api.editMessageText(
-        chatId,
-        msgId,
-        '❌ Bu Reels dan filmni aniqlay olmadim.\n\n' +
-          '• Instagram havolasi ochiq va to‘g‘ri ekanini tekshiring\n' +
-          '• Yoki shu sahna screenshot qilib yuboring\n' +
-          '• Yoki filmni qisqacha matn bilan tasvirlab yozing'
-      );
+      await ctx.api.editMessageText(chatId, msgId, c.fail);
       return;
     }
 
@@ -137,15 +175,25 @@ export async function handleInstagramReelUrl(ctx: Context, reelUrl: string): Pro
       confidence: identified.confidence ?? null,
       photoFileId: null,
       keyboardKeepJson: JSON.stringify({ inline_keyboard: watchKb }),
+      userQueryText: queryForFeedback,
+      botReplyPreview: buildBotReplyPreview({
+        uzTitle: details.uzTitle,
+        title: details.title,
+        plotUz: details.plotUz,
+      }),
     });
 
     await sendMovieResult(ctx, details, { pendingFeedbackToken: pendingToken, confidence: identified.confidence });
   } catch (err) {
-    console.error('Reels handler xato:', err);
+    console.error('Video link handler xato:', err);
     const msg =
       err instanceof Error && err.message === 'process_timeout'
         ? '❌ Video yoki kadr qayta ishlash vaqti tugadi. Keyinroq qayta urinib ko‘ring.'
-        : '❌ Reels ni qayta ishlab bo‘lmadi (yuklash yoki Instagram cheklovi). Screenshot yoki matn bilan urinib ko‘ring.';
+        : c.processErr;
     await safeEditOrNotify(ctx, chatId, processing?.message_id, msg);
   }
+}
+
+export async function handleInstagramReelUrl(ctx: Context, reelUrl: string, fullText?: string): Promise<void> {
+  return handleVideoLink(ctx, reelUrl, { platform: 'instagram', fullText });
 }

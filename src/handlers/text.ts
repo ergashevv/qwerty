@@ -18,8 +18,8 @@ import { insertPendingFeedback } from '../db/feedbackPending';
 import { buildBotReplyPreview } from '../utils/feedbackPreview';
 import { buildWatchKeyboard, sendMovieResult } from './photo';
 import { USER_REQUEST_LIMIT, isUnlimitedUser } from '../config/limits';
-import { extractInstagramReelUrl } from '../services/reelsUrl';
-import { handleInstagramReelUrl } from './reels';
+import { extractInstagramReelUrl, extractYouTubeUrl } from '../services/reelsUrl';
+import { handleVideoLink } from './reels';
 import { STATUS_DETAILS_LINES, withRotatingStatus } from './rotatingStatus';
 import { setUserTextContext } from '../services/userContext';
 import { completeSurveyProblemText, getSurveyProblemPending } from '../db/surveyBroadcast';
@@ -78,7 +78,13 @@ export async function handleText(ctx: Context): Promise<void> {
 
   const reelUrl = extractInstagramReelUrl(text);
   if (reelUrl) {
-    await handleInstagramReelUrl(ctx, reelUrl);
+    await handleVideoLink(ctx, reelUrl, { platform: 'instagram', fullText: text });
+    return;
+  }
+
+  const ytUrl = extractYouTubeUrl(text);
+  if (ytUrl) {
+    await handleVideoLink(ctx, ytUrl, { platform: 'youtube', fullText: text });
     return;
   }
 

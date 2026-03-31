@@ -110,7 +110,10 @@ export interface ReelsIdentifyResult extends Pick<MovieIdentified, 'title' | 'ty
 /**
  * Videodan ketma-kadrlar bilan identifyMovie — birinchi muvaffaqiyatli natija.
  */
-export async function identifyMovieFromReelVideo(reelUrl: string): Promise<ReelsIdentifyResult | null> {
+export async function identifyMovieFromReelVideo(
+  reelUrl: string,
+  textHint?: string | null
+): Promise<ReelsIdentifyResult | null> {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kinova-reel-'));
   try {
     const videoPath = await downloadVideo(reelUrl, workDir);
@@ -120,7 +123,7 @@ export async function identifyMovieFromReelVideo(reelUrl: string): Promise<Reels
       const fp = await extractOneFrame(videoPath, workDir, off, i);
       if (!fp) continue;
       const base64 = fs.readFileSync(fp).toString('base64');
-      const id = await identifyMovie(base64, 'image/jpeg');
+      const id = await identifyMovie(base64, 'image/jpeg', textHint?.trim() || null);
       if (id.ok && id.identified.title) {
         return {
           title: id.identified.title,
