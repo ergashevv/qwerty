@@ -38,6 +38,7 @@ import {
   FEEDBACK_WRITE_NEXT_HTML,
 } from './messages/feedback';
 import { handleProblemReportUnsupportedMedia } from './handlers/problemReportWrongMedia';
+import { escHtml } from './handlers/photo';
 
 /** `t.me/bot?start=feedback` — xabar matni: `/start feedback` */
 const START_PAYLOAD_FEEDBACK = 'feedback';
@@ -144,17 +145,14 @@ async function bootstrap(): Promise<void> {
       ? `<b>Shikoyat yoki taklif</b> — <a href="https://t.me/${botU}?start=${START_PAYLOAD_FEEDBACK}">/feedback</a>`
       : `<b>Shikoyat yoki taklif</b> — <code>/feedback</code>`;
     await ctx.reply(
-      `Assalomu alaykum, <b>${name}</b>! 🎬\n\n` +
-        `<b>Nima qiladi?</b>\n` +
-        `Kadr, video havola yoki matndan filmni topib, <b>o‘zbekcha tomosha havolalarini</b> yuboraman.\n\n` +
+      `Assalomu alaykum, <b>${escHtml(name)}</b>! 🎬\n\n` +
+        `<b>Bu bot nima qiladi?</b>\n\n` +
+        `Kadr, video havola yoki matndan filmni topib, o‘zbekcha tomosha havolalarini yuboraman.\n\n` +
         `<b>Yuborishingiz mumkin</b>\n` +
-        `📸 <b>Rasm</b> — filmdan screenshot\n` +
-        `🔗 <b>Havola</b> — Reels, YouTube\n` +
-        `✍️ <b>Matn</b> — nom yoki qisqa tavsif\n\n` +
-        `<b>Film topilgach pastda chiqadi</b>\n` +
-        `▶️ Tomosha havolalari\n` +
-        `✅ Ha / ❌ Yo‘q — to‘g‘ri yoki noto‘g‘ri\n` +
-        `📤 Ulashish karti (Story)\n\n` +
+        `📸 Rasm — filmdan screenshot\n` +
+        `🔗 Havola — Reels, YouTube\n` +
+        `✍️ Matn — nom yoki qisqa tavsif\n\n` +
+        `Va filmni berilgan havolalar orqali bemalol tomosha qilishingiz mumkin\n\n` +
         feedbackLine,
       {
         parse_mode: 'HTML',
