@@ -23,6 +23,7 @@ import { identifyMovieFromReelVideo, type ReelsIdentifyResult } from '../service
 import { REELS_LIMIT_PER_WINDOW, REELS_WINDOW_SECONDS } from '../config/limits';
 import { STATUS_DETAILS_LINES, STATUS_IDENTIFY_LINES, withRotatingStatus } from './rotatingStatus';
 import { ackTyping, safeEditOrNotify } from '../utils/safeTelegram';
+import { runWithGeminiUsageContext } from '../services/geminiUsageContext';
 import {
   extractUserHintBesideFirstUrl,
   normalizeVideoUrlForCache,
@@ -194,16 +195,18 @@ export async function handleVideoLink(ctx: Context, videoUrl: string, opts: Hand
     };
 
     try {
-      await deliverResolvedReelsResult(ctx, {
-        userId,
-        chatId,
-        processingMsgId: msgId,
-        identified,
-        queryForFeedback,
-        urlHash,
-        normalizedUrl,
-        writeUrlCache: false,
-      });
+      await runWithGeminiUsageContext(userId, async () =>
+        deliverResolvedReelsResult(ctx, {
+          userId,
+          chatId,
+          processingMsgId: msgId,
+          identified,
+          queryForFeedback,
+          urlHash,
+          normalizedUrl,
+          writeUrlCache: false,
+        })
+      );
     } catch (err) {
       console.error('Video URL cache deliver xato:', err);
       await safeEditOrNotify(
@@ -248,13 +251,15 @@ export async function handleVideoLink(ctx: Context, videoUrl: string, opts: Hand
 
     const outcome = await enqueueReelsJob(async () => {
       await ctx.api.editMessageText(chatId, msgId, c.download);
-      return withRotatingStatus(
-        ctx,
-        chatId,
-        msgId,
-        STATUS_IDENTIFY_LINES,
-        () => identifyMovieFromReelVideo(videoUrl, hint),
-        { intervalMs: 3000 }
+      return runWithGeminiUsageContext(userId, async () =>
+        withRotatingStatus(
+          ctx,
+          chatId,
+          msgId,
+          STATUS_IDENTIFY_LINES,
+          () => identifyMovieFromReelVideo(videoUrl, hint),
+          { intervalMs: 3000 }
+        )
       );
     });
 
@@ -286,16 +291,18 @@ export async function handleVideoLink(ctx: Context, videoUrl: string, opts: Hand
       return;
     }
 
-    await deliverResolvedReelsResult(ctx, {
-      userId,
-      chatId,
-      processingMsgId: msgId,
-      identified: outcome.identified,
-      queryForFeedback,
-      urlHash,
-      normalizedUrl,
-      writeUrlCache: true,
-    });
+    await runWithGeminiUsageContext(userId, async () =>
+      deliverResolvedReelsResult(ctx, {
+        userId,
+        chatId,
+        processingMsgId: msgId,
+        identified: outcome.identified,
+        queryForFeedback,
+        urlHash,
+        normalizedUrl,
+        writeUrlCache: true,
+      })
+    );
   } catch (err) {
     console.error('Video link handler xato:', err);
     const msg =

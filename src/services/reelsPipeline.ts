@@ -11,8 +11,14 @@ const DOWNLOAD_TIMEOUT_MS = parseInt(process.env.REELS_DOWNLOAD_TIMEOUT_MS || '9
 const FFMPEG_TIMEOUT_MS = parseInt(process.env.REELS_FFMPEG_TIMEOUT_MS || '45000', 10);
 const MAX_FILE_MB = parseInt(process.env.REELS_MAX_DOWNLOAD_MB || '80', 10);
 
-/** Sekund — qora kadr / titr ehtimolini kamaytirish uchun bir nechta nuqta */
-const FRAME_OFFSETS_SEC = [0.5, 1.2, 2.5, 4.0, 5.5, 7.5];
+/** Sekund — qora kadr / titr ehtimolini kamaytirish (default 4 nuqta — sifatni saqlab token tejash) */
+const FRAME_OFFSETS_SEC = (() => {
+  const raw = process.env.REELS_FRAME_OFFSETS_SEC?.trim();
+  const fallback = [0.5, 2.0, 4.5, 7.5];
+  if (!raw) return fallback;
+  const parts = raw.split(',').map((s) => parseFloat(s.trim())).filter((n) => !Number.isNaN(n) && n >= 0);
+  return parts.length > 0 ? parts : fallback;
+})();
 
 function runProcess(
   command: string,

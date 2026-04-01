@@ -424,6 +424,25 @@ export async function initPostgresSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_survey_broadcast_sent_campaign
     ON survey_broadcast_sent (campaign_id, created_at DESC)
   `);
+
+  /** Gemini: har bir generateContent — tokenlar (dashboard / byudjet) */
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS gemini_usage (
+      id BIGSERIAL PRIMARY KEY,
+      telegram_id BIGINT,
+      operation TEXT NOT NULL,
+      prompt_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      total_tokens INTEGER NOT NULL DEFAULT 0,
+      created_at BIGINT NOT NULL
+    )
+  `);
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_gemini_usage_created ON gemini_usage (created_at DESC)
+  `);
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_gemini_usage_user_time ON gemini_usage (telegram_id, created_at DESC)
+  `);
 }
 
 export async function withPgClient<T>(fn: (c: PoolClient) => Promise<T>): Promise<T | null> {
@@ -507,5 +526,18 @@ export async function runAnalyticsRetention(): Promise<void> {
     }
   } catch (e) {
     console.warn('analytics retention:', (e as Error).message);
+  }
+
+  const geminiUsageDays = Math.min(365, Math.max(14, parseInt(process.env.GEMINI_USAGE_RETENTION_DAYS || '90', 10)));
+  try {
+    const gr = await pool.query(`DELETE FROM gemini_usage WHERE created_at < $1`, [
+      Math.floor(Date.now() / 1000) - geminiUsageDays * 86400,
+    ]);
+    const gn = gr.rowCount ?? 0;
+    if (gn > 0) {
+      console.log(`📉 gemini_usage: ${gn} ta eski yozuv o‘chirildi (${geminiUsageDays}+ kun)`);
+    }
+  } catch (e) {
+    console.warn('gemini_usage retention:', (e as Error).message);
   }
 }

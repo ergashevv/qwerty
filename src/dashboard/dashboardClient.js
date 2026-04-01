@@ -73,6 +73,7 @@
 
       renderUserActivity(data.userActivityTop || []);
       renderRecentFeedback(data.recentFeedbackPreview || []);
+      renderGeminiUsage(data.geminiUsage || null);
 
     } catch (e) {
       showDashErr('Chizish xatosi: ' + (e.message || String(e)));
@@ -259,6 +260,67 @@
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  function renderGeminiUsage(gu) {
+    var elTot = document.getElementById('geminiTotals');
+    var elOp = document.getElementById('geminiByOp');
+    var elU = document.getElementById('geminiTopUsers');
+    if (!elTot || !elOp || !elU) return;
+
+    if (!gu || !gu.h24) {
+      elTot.innerHTML = '<p style="margin:0;color:var(--text-muted)">Ma’lumot yo‘q — bot yangi versiyasini ishga tushiring va bir necha so‘rov qiling.</p>';
+      elOp.innerHTML = '';
+      elU.innerHTML = '<p class="panel-note" style="margin:0">—</p>';
+      return;
+    }
+
+    function row(t) {
+      return (
+        '<div style="display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.06)">' +
+        '<span style="color:var(--text-muted)">' + esc(t.label) + '</span>' +
+        '<span style="font-weight:600">' + fmt(t.val) + ' tok · ' + fmt(t.calls) + ' chaq</span>' +
+        '</div>'
+      );
+    }
+
+    elTot.innerHTML =
+      row({ label: '24 soat', val: gu.h24.totalTokens, calls: gu.h24.calls }) +
+      row({ label: '7 kun', val: gu.d7.totalTokens, calls: gu.d7.calls }) +
+      row({ label: '30 kun', val: gu.d30.totalTokens, calls: gu.d30.calls });
+
+    var ops = gu.byOperation7d || [];
+    if (ops.length === 0) {
+      elOp.innerHTML = '<p class="panel-note" style="margin:0">Hozircha yozuv yo‘q.</p>';
+    } else {
+      elOp.innerHTML = ops
+        .map(function (o) {
+          return (
+            '<div class="film-row">' +
+            '<span class="film-title">' + esc(o.operation) + '</span>' +
+            '<span class="film-hits">' + fmt(o.totalTokens) + ' tok · ' + fmt(o.calls) + '</span>' +
+            '</div>'
+          );
+        })
+        .join('');
+    }
+
+    var users = gu.topUsers7d || [];
+    if (users.length === 0) {
+      elU.innerHTML = '<p class="panel-note" style="margin:0">User ID bilan bog‘langan chaqiruvlar hali yo‘q.</p>';
+    } else {
+      elU.innerHTML = users
+        .map(function (u) {
+          var name = initialFromUser(u) + ' <code style="font-size:0.75em;opacity:.85">' + u.telegramUserId + '</code>';
+          return (
+            '<div class="user-activity-row">' +
+            '<div class="ua-name">' + name + '</div>' +
+            '<div class="ua-stats"><span>' + fmt(u.totalTokens) + ' tok</span> · <span>' + fmt(u.calls) + ' chaq</span></div>' +
+            '</div>'
+          );
+        })
+        .join('');
+    }
   }
 
   function initialFromUser(u) {

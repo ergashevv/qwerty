@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "description": "Telegram bot for movie identification from screenshots",
   "main": "dist/bot.js",
+  "exports": {
+    "./services/movieService": "./src/services/movieService.ts",
+    "./db": "./src/db/index.ts"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && cp src/dashboard/dashboardClient.js dist/dashboard/dashboardClient.js",
     "start": "node dist/bot.js",

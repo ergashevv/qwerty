@@ -74,6 +74,36 @@ export interface UserActivityRow {
   feedbackTotal30d: number;
 }
 
+/** Gemini API — `usageMetadata` dan jamlangan (billing bilan yaqin) */
+export interface GeminiUsageTotals {
+  totalTokens: number;
+  promptTokens: number;
+  outputTokens: number;
+  calls: number;
+}
+
+export interface GeminiUsageByOperation {
+  operation: string;
+  totalTokens: number;
+  calls: number;
+}
+
+export interface GeminiUsageUserRow {
+  telegramUserId: number;
+  userFirstName: string | null;
+  userUsername: string | null;
+  totalTokens: number;
+  calls: number;
+}
+
+export interface GeminiUsageSnapshot {
+  h24: GeminiUsageTotals;
+  d7: GeminiUsageTotals;
+  d30: GeminiUsageTotals;
+  byOperation7d: GeminiUsageByOperation[];
+  topUsers7d: GeminiUsageUserRow[];
+}
+
 export interface DashboardPayload {
   users: number;
   usersStarted: number;
@@ -120,9 +150,127 @@ export interface DashboardPayload {
   };
   /** So‘nggi 14 kun — kunlik, manba bo‘yicha */
   searchRequestsByDay14: SearchRequestDayRow[];
+  /** Gemini tokenlar — user va operatsiya bo‘yicha (yozuv boshlanganidan keyin to‘ldiriladi) */
+  geminiUsage: GeminiUsageSnapshot | null;
 }
 
 const EMPTY_SEARCH_TRIPLE: SearchRequestTriple = { text: 0, photo: 0, reels: 0 };
+
+const EMPTY_GEMINI_TOTALS: GeminiUsageTotals = {
+  totalTokens: 0,
+  promptTokens: 0,
+  outputTokens: 0,
+  calls: 0,
+};
+
+async function geminiTotalsSince(sinceEpoch: number): Promise<GeminiUsageTotals> {
+  try {
+    const r = await getPostgresPool().query(
+      `
+      SELECT
+        COALESCE(SUM(total_tokens), 0)::bigint AS t,
+        COALESCE(SUM(prompt_tokens), 0)::bigint AS p,
+        COALESCE(SUM(output_tokens), 0)::bigint AS o,
+        COUNT(*)::int AS c
+      FROM gemini_usage
+      WHERE created_at >= $1
+    `,
+      [sinceEpoch]
+    );
+    const row = r.rows[0] as { t: string; p: string; o: string; c: number };
+    return {
+      totalTokens: Number(row.t ?? 0),
+      promptTokens: Number(row.p ?? 0),
+      outputTokens: Number(row.o ?? 0),
+      calls: Number(row.c ?? 0),
+    };
+  } catch {
+    return { ...EMPTY_GEMINI_TOTALS };
+  }
+}
+
+async function geminiByOperationSince(sinceEpoch: number): Promise<GeminiUsageByOperation[]> {
+  try {
+    const r = await getPostgresPool().query(
+      `
+      SELECT operation, COALESCE(SUM(total_tokens), 0)::bigint AS tt, COUNT(*)::int AS c
+      FROM gemini_usage
+      WHERE created_at >= $1
+      GROUP BY operation
+      ORDER BY SUM(total_tokens) DESC
+      LIMIT 24
+    `,
+      [sinceEpoch]
+    );
+    return (r.rows as { operation: string; tt: string; c: number }[]).map((row) => ({
+      operation: row.operation,
+      totalTokens: Number(row.tt ?? 0),
+      calls: Number(row.c ?? 0),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+async function geminiTopUsersSince(sinceEpoch: number, limit: number): Promise<GeminiUsageUserRow[]> {
+  const lim = Math.min(Math.max(1, limit), 50);
+  try {
+    const r = await getPostgresPool().query(
+      `
+      SELECT
+        g.telegram_id,
+        COALESCE(SUM(g.total_tokens), 0)::bigint AS tt,
+        COUNT(*)::int AS c,
+        u.first_name,
+        u.username
+      FROM gemini_usage g
+      LEFT JOIN users u ON u.telegram_id = g.telegram_id
+      WHERE g.created_at >= $1 AND g.telegram_id IS NOT NULL
+      GROUP BY g.telegram_id, u.first_name, u.username
+      ORDER BY SUM(g.total_tokens) DESC
+      LIMIT $2
+    `,
+      [sinceEpoch, lim]
+    );
+    return (r.rows as Record<string, unknown>[]).map((row) => {
+      const tid = Number(row.telegram_id);
+      const fn =
+        row.first_name != null && String(row.first_name).trim() !== ''
+          ? String(row.first_name).trim()
+          : null;
+      const un =
+        row.username != null && String(row.username).trim() !== ''
+          ? String(row.username).trim()
+          : null;
+      return {
+        telegramUserId: Number.isFinite(tid) ? tid : 0,
+        userFirstName: fn,
+        userUsername: un,
+        totalTokens: Number(row.tt ?? 0),
+        calls: Number(row.c ?? 0),
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function loadGeminiUsageSnapshot(): Promise<GeminiUsageSnapshot | null> {
+  try {
+    await getPostgresPool().query(`SELECT 1 FROM gemini_usage LIMIT 1`);
+  } catch {
+    return null;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const [h24, d7, d30, byOperation7d, topUsers7d] = await Promise.all([
+    geminiTotalsSince(now - 86400),
+    geminiTotalsSince(now - 7 * 86400),
+    geminiTotalsSince(now - 30 * 86400),
+    geminiByOperationSince(now - 7 * 86400),
+    geminiTopUsersSince(now - 7 * 86400, 25),
+  ]);
+  return { h24, d7, d30, byOperation7d, topUsers7d };
+}
 
 async function searchRequestCountsSince(sinceEpoch: number): Promise<SearchRequestTriple> {
   try {
@@ -634,11 +782,12 @@ export async function loadDashboardPayload(): Promise<DashboardPayload> {
   }
 
   const nowSec = Math.floor(Date.now() / 1000);
-  const [srH24, srD7, srD30, searchRequestsByDay14] = await Promise.all([
+  const [srH24, srD7, srD30, searchRequestsByDay14, geminiUsage] = await Promise.all([
     searchRequestCountsSince(nowSec - 86400),
     searchRequestCountsSince(nowSec - 7 * 86400),
     searchRequestCountsSince(nowSec - 30 * 86400),
     loadSearchRequestsByDay14(),
+    loadGeminiUsageSnapshot(),
   ]);
 
   const userCount = Number(userCountRow.rows[0]?.c ?? 0);
@@ -681,5 +830,6 @@ export async function loadDashboardPayload(): Promise<DashboardPayload> {
     recentFeedbackPreview,
     searchRequests: { h24: srH24, d7: srD7, d30: srD30 },
     searchRequestsByDay14,
+    geminiUsage,
   };
 }

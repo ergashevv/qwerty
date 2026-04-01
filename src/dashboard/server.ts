@@ -687,6 +687,29 @@ function dashboardPage(logoHref: string | null): string {
         <div class="kpi-hint" id="hintSrReels">24 soat / 7 kun / 30 kun</div>
       </div>
     </div>
+
+    <div class="section-title" style="margin-top:8px">Gemini API (token)</div>
+    <p class="panel-note" style="margin:0 0 18px;max-width:900px;line-height:1.5">
+      Har bir model javobidagi <strong>usageMetadata</strong> jamlanadi (billing bilan yaqin). Sarfni keskin boshqarish:
+      <code style="font-size:0.85em">GEMINI_MAX_VERIFY</code> (tasdiq urinishlari),
+      <code style="font-size:0.85em">REELS_FRAME_OFFSETS_SEC</code> (Reels kadrlar soni),
+      grounding: <code style="font-size:0.85em">GEMINI_GROUNDING_TEXT_SEARCH=false</code>.
+    </p>
+    <div class="dashboard-row" style="grid-template-columns: 1fr 1fr;">
+      <div class="panel">
+        <h2>Jami tokenlar</h2>
+        <div id="geminiTotals" class="panel-note" style="margin:0">…</div>
+      </div>
+      <div class="panel">
+        <h2>Operatsiyalar (7 kun)</h2>
+        <div id="geminiByOp" class="film-list" style="margin:0">…</div>
+      </div>
+    </div>
+    <div class="panel" style="margin-top:20px">
+      <h2>Token — top foydalanuvchilar (7 kun)</h2>
+      <div id="geminiTopUsers" class="user-activity-scroll"><p class="panel-note" style="margin:0">…</p></div>
+    </div>
+
     <div class="kpi-grid" id="mainKpis">
       <div class="kpi-card" style="--accent: var(--accent)">
         <div class="kpi-label">Jami foydalanuvchilar</div>

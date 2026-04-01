@@ -13,6 +13,7 @@ import {
   extractInstagramSource,
   getActorFilmFallbackCandidates,
 } from '../services/movieService';
+import { runWithGeminiUsageContext } from '../services/geminiUsageContext';
 import { insertAnalyticsEvent } from '../db/postgres';
 import { getRecentUserText, clearUserTextContext } from '../services/userContext';
 import {
@@ -72,6 +73,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
 
   let processing: { message_id: number } | undefined;
   try {
+    await runWithGeminiUsageContext(userId, async () => {
     processing = await ctx.reply('🔍 Qidirilmoqda...');
     void ctx.api.sendChatAction(chatId, 'typing');
 
@@ -158,7 +160,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
     clearUserTextContext(userId);
 
     // Instagram source — topildi/topilmadidan qat'iy nazar, fon rejimida
-    void extractInstagramSource(base64).then(account => {
+    void extractInstagramSource(base64, userId).then(account => {
       if (account) {
         console.log(`📸 Instagram source: @${account}`);
         insertAnalyticsEvent('instagram_source', {
@@ -272,6 +274,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
     });
 
     await sendMovieResult(ctx, details, { pendingFeedbackToken: pendingToken, confidence: identified.confidence });
+    });
   } catch (err) {
     console.error('Photo handler xato:', err);
     await safeEditOrNotify(
