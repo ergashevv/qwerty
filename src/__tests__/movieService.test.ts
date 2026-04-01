@@ -14,6 +14,7 @@ import axios from 'axios';
 import {
   normalizeTitle,
   titlesMatch,
+  titlesMatchNative,
   isNoisyTitle,
   tmdbSearch,
   omdbSearch,
@@ -41,6 +42,19 @@ describe('normalizeTitle', () => {
 
   test('kichik harfga o\'giradi', () => {
     expect(normalizeTitle('AVATAR')).toBe('avatar');
+  });
+});
+
+// ─── 1b. titlesMatchNative — serial raqami ───────────────────────────────────
+
+describe('titlesMatchNative — serial raqami', () => {
+  test('"iron man 4" va "Iron Man" — mos emas', () => {
+    expect(titlesMatchNative('iron man 4', 'Iron Man')).toBe(false);
+  });
+
+  test('"iron man 4" va "Iron Man 4" yoki "Taxi 4" — mos', () => {
+    expect(titlesMatchNative('iron man 4', 'Iron Man 4')).toBe(true);
+    expect(titlesMatchNative('iron man 4', 'Taxi 4')).toBe(false);
   });
 });
 
@@ -326,10 +340,10 @@ describe('identifyFromText — to\'liq pipeline', () => {
     expect(result?.title).toBe('Parasite');
   });
 
-  test('[TUZATILDI] o\'zbekcha nom bilan — TMDB mashhur natijasiga ishonadi (vote_count≥500)', async () => {
+  test('[TUZATILDI] o\'zbekcha nom — TMDB mos kelmasa mashhur bo\'lsa ham rad (vote_count ishonchsiz)', async () => {
     // OMDB: titlesMatch sababli null
     mockedAxios.get.mockResolvedValueOnce({ data: { Search: [] } });
-    // TMDB: "Iron Man" qaytaradi — vote_count: 25000 (juda mashhur)
+    // TMDB: "Iron Man" — lekin so'rov "Temir Odam", sarlavha mos emas
     mockedAxios.get.mockResolvedValueOnce({
       data: {
         results: [
@@ -339,9 +353,8 @@ describe('identifyFromText — to\'liq pipeline', () => {
     });
 
     const result = await identifyFromText('Temir Odam');
-    console.log(`[TUZATILDI] identifyFromText("Temir Odam") = ${JSON.stringify(result)} — mashhur film qabul qilindi`);
-    // Tuzatildi: vote_count >= 500 bo'lsa, TMDB natijasiga ishonamiz
-    expect(result?.title).toBe('Iron Man');
+    console.log(`[TUZATILDI] identifyFromText("Temir Odam") = ${JSON.stringify(result)} — mos kelmasa null`);
+    expect(result).toBeNull();
   });
 
   test('[TUZATILDI] TMDB noto\'g\'ri mashxur bo\'lmagan natijasi reject qilinadi', async () => {

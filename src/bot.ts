@@ -250,11 +250,10 @@ async function bootstrap(): Promise<void> {
 
       await ctx.reply(
         `📊 <b>Statistika</b>\n\n` +
-          `👥 Jami: ${aud.totalUsers}  |  ✅ Aktiv: ${activeUsers}  |  🚫 Bloklagan: ${blockedCount}\n\n` +
-          `<b>Bugungi faollik</b>\n` +
-          `🟢 Bugun: ${aud.dau}\n` +
-          `📅 Hafta: ${aud.wau}\n` +
-          `🗓 Oy: ${aud.mau}\n\n` +
+          `👥 Jami: ${aud.totalUsers}  |  ✅ Aktiv (bloklamagan): ${activeUsers}  |  🚫 Bloklagan: ${blockedCount}\n` +
+          `<b>Faollik</b> — UTC, dashboarddagi DAU/7 kun/30 kun bilan bir xil\n` +
+          `🟢 Bugun: ${aud.dau}  ·  📅 7 kun: ${aud.wau}  ·  🗓 30 kun: ${aud.mau}\n` +
+          `<i>Eslatma: bosh sahifadagi «Faol foydalanuvchilar» tanlangan sana oralig‘idagi noyoblar — boshqa metrika.</i>\n\n` +
           `<b>Natija</b>\n` +
           `✅ To'g'ri: ${fb.yes}  ❌ Xato: ${fb.no}\n` +
           `🎯 Aniqlik: ${pct}%  (jami ${fbTotal} javob)`,

@@ -47,26 +47,24 @@ export interface AudienceStats {
 
 export async function getAudienceStats(): Promise<AudienceStats> {
   const pool = getPostgresPool();
-  /** Kunlik = bugungi UTC kun; haftalik = joriy hafta (dushanbadan bugungacha, UTC); oylik = joriy oy (1-kundan bugungacha, UTC). */
+  /**
+   * DAU = bugungi UTC kun.
+   * WAU / MAU — dashboard `queryDauWauMau` bilan bir xil: oxirgi 7 va 30 UTC kunlari
+   * (eski: kalend. hafta/oy — oyning 1-kunida «Oy» = «Bugun» bo‘lib qolardi).
+   */
   const r = await pool.query(`
-    WITH bounds AS (
-      SELECT
-        (now() AT TIME ZONE 'utc')::date AS today_utc,
-        (date_trunc('week', (now() AT TIME ZONE 'utc')::timestamp))::date AS week_start_utc,
-        (date_trunc('month', (now() AT TIME ZONE 'utc')::timestamp))::date AS month_start_utc
-    )
     SELECT
       (SELECT COUNT(*)::int FROM users) AS total_users,
       (SELECT COUNT(*)::int FROM users WHERE started_at IS NOT NULL) AS users_started,
-      (SELECT COUNT(DISTINCT uad.telegram_id)::int
-       FROM user_activity_day uad, bounds b
-       WHERE uad.day_utc = b.today_utc) AS dau,
-      (SELECT COUNT(DISTINCT uad.telegram_id)::int
-       FROM user_activity_day uad, bounds b
-       WHERE uad.day_utc >= b.week_start_utc AND uad.day_utc <= b.today_utc) AS wau,
-      (SELECT COUNT(DISTINCT uad.telegram_id)::int
-       FROM user_activity_day uad, bounds b
-       WHERE uad.day_utc >= b.month_start_utc AND uad.day_utc <= b.today_utc) AS mau
+      (SELECT COUNT(DISTINCT telegram_id)::int
+       FROM user_activity_day
+       WHERE day_utc = (now() AT TIME ZONE 'utc')::date) AS dau,
+      (SELECT COUNT(DISTINCT telegram_id)::int
+       FROM user_activity_day
+       WHERE day_utc >= (now() AT TIME ZONE 'utc')::date - INTERVAL '7 days') AS wau,
+      (SELECT COUNT(DISTINCT telegram_id)::int
+       FROM user_activity_day
+       WHERE day_utc >= (now() AT TIME ZONE 'utc')::date - INTERVAL '30 days') AS mau
   `);
   const row = r.rows[0] as {
     total_users: number;

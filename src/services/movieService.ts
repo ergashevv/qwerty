@@ -88,6 +88,26 @@ function slugifyForMatch(text: string): string {
 }
 
 /**
+ * So'rovda bo'shliqdan keyin qism (masalan "Iron Man 4") bo'lsa, sarlavhada ham shu raqam bo'lishi kerak.
+ * Yil (1917) bilan adashmaslik uchun faqat oxirida bo'shliq bilan kelgan 2–15 oralig'idagi raqamlar.
+ */
+function sequelNumberMismatch(query: string, title: string): boolean {
+  const m = query.trim().toLowerCase().match(/\s(\d{1,2})\s*$/);
+  if (!m) return false;
+  const num = m[1];
+  const n = parseInt(num, 10);
+  if (n < 2 || n > 15) return false;
+  const re = new RegExp(`(^|\\s|\\()${num}(\\s|$|:|\\)|-)`, 'i');
+  return !re.test(title);
+}
+
+/** OMDB/TMDB matn qidiruvi — titlesMatch + serial raqamini hisobga oladi */
+function titlesMatchForSearchQuery(userQuery: string, title: string): boolean {
+  if (!titlesMatch(userQuery, title)) return false;
+  return !sequelNumberMismatch(userQuery, title);
+}
+
+/**
  * Kirill, turk, arab va boshqa non-ASCII matnlar uchun to'g'ridan-to'g'ri solishtirish.
  * normalizeTitle() ular uchun ishlamaydi (barcha non-ASCII ni o'chirib tashlaydi).
  */
@@ -97,10 +117,25 @@ export function titlesMatchNative(query: string, ...titles: string[]): boolean {
     if (!t) continue;
     const tc = t.toLowerCase().trim();
     if (tc === q) return true;
-    if (tc.length >= 4 && q.includes(tc)) return true;
+    if (tc.length >= 4 && q.includes(tc)) {
+      const idx = q.indexOf(tc);
+      const suffix = q.slice(idx + tc.length).trim();
+      if (suffix === '') return true;
+      // "Iron Man 4" vs "Iron Man" — raqam so'rovda bo'lsa, sarlavhada ham bo'lishi kerak
+      if (/^\d+$/.test(suffix)) {
+        const re = new RegExp(`(^|\\s|\\()${suffix}(\\s|$|:|\\)|-)`, 'i');
+        if (!re.test(t)) continue;
+        return true;
+      }
+      // "iron man something" vs "iron man" — avtomatik mos demaymiz; quyidagi titlesMatch sinasin
+      continue;
+    }
     if (q.length >= 4 && tc.includes(q)) return true;
     // titlesMatch (ASCII-normalized) ham sinab ko'ramiz
-    if (titlesMatch(q, tc)) return true;
+    if (titlesMatch(q, tc)) {
+      if (sequelNumberMismatch(query, t)) continue;
+      return true;
+    }
   }
   return false;
 }
@@ -245,9 +280,9 @@ export async function tmdbSearch(query: string, type: MediaType | 'multi' = 'mul
     
     // Exact match yoki yuqori mashhurlikka ega natijani qidirish (movie/tv da ham birinchi natija doim to‘g‘ri emas)
     const hit = type === 'multi'
-      ? (results.find(x => (x.media_type === 'movie' || x.media_type === 'tv') && titlesMatch(query, x.title || x.name || '')) || 
+      ? (results.find(x => (x.media_type === 'movie' || x.media_type === 'tv') && titlesMatchForSearchQuery(query, x.title || x.name || '')) || 
          results.find(x => x.media_type === 'movie' || x.media_type === 'tv'))
-      : (results.find(x => titlesMatch(query, x.title || x.name || '')) || results[0]);
+      : (results.find(x => titlesMatchForSearchQuery(query, x.title || x.name || '')) || results[0]);
 
     if (!hit) return null;
     const mtype: MediaType = (hit.media_type === 'tv' || type === 'tv') ? 'tv' : 'movie';
@@ -309,7 +344,7 @@ export async function omdbSearch(query: string, type?: 'movie' | 'series'): Prom
     for (const item of list) {
       if (item.Type !== 'movie' && item.Type !== 'series') continue;
       if (isNoisyTitle(item.Title)) continue;
-      if (!titlesMatch(query, item.Title)) continue;
+      if (!titlesMatchForSearchQuery(query, item.Title)) continue;
       return { title: item.Title, type: item.Type === 'series' ? 'tv' : 'movie', imdbId: item.imdbID };
     }
   } catch { /* ignore */ }
@@ -443,8 +478,7 @@ async function kinopoiskSearch(query: string): Promise<{ film: KpFilm; type: Med
         return { film, type: toMediaType(film.type) };
       }
     }
-    // Aniq mos kelmasa — birinchi natija (odatda eng mos keladigan)
-    return { film: films[0], type: toMediaType(films[0].type) };
+    return null;
   } catch (e) {
     console.warn('Kinopoisk search xato:', (e as Error).message?.slice(0, 60));
     return null;
@@ -1129,10 +1163,6 @@ export async function identifyFromTextDetailed(query: string): Promise<IdentifyF
         // Agar inglizcha sarlavha bo'sh bo'lsa, original sarlavhani ishlatamiz
         return found({ title: tmdbTitle || tmdbOrigTitle, type: tmdb.type });
       }
-      // O‘zbekcha / boshqa til so‘rovida TMDB birinchi natijasi juda mashhur bo‘lsa — shu film deb olamiz
-      if ((tmdb.result.vote_count ?? 0) >= 500) {
-        return found({ title: tmdbTitle || tmdbOrigTitle, type: tmdb.type });
-      }
     }
   }
 
@@ -1243,7 +1273,7 @@ Respond ONLY with this JSON structure:
         const tmdbOrigTitle = tmdbVerified.result.original_title || tmdbVerified.result.original_name || '';
         tmdbOverview = tmdbVerified.result.overview || null;
         // SNG/CIS filmlar uchun: original_title (kirill/turk) bilan ham solishtirish, threshold 100 ga tushirildi
-        if (titlesMatchNative(p.title, tmdbTitle, tmdbOrigTitle) || (tmdbVerified.result.vote_count ?? 0) >= 100) {
+        if (titlesMatchNative(p.title, tmdbTitle, tmdbOrigTitle)) {
           verifiedTitle = tmdbTitle || tmdbOrigTitle;
           verifiedType = tmdbVerified.type;
         }
@@ -1271,6 +1301,12 @@ Respond ONLY with this JSON structure:
         }
       }
 
+      // Qisqa so'rovda oxirida serial raqami bo'lsa (masalan "Iron Man 4"), LLM boshqa filmni tasdiqlasa — rad
+      if (verifiedTitle && /\s\d{1,2}\s*$/.test(query.trim()) && !titlesMatchNative(query, verifiedTitle)) {
+        console.log(`LLM rad: so'rov "${query}" ↔ "${verifiedTitle}" (serial raqam mos emas)`);
+        return notFound();
+      }
+
       if (verifiedTitle) {
         return found({ title: verifiedTitle, type: verifiedType });
       }
@@ -1285,6 +1321,9 @@ Respond ONLY with this JSON structure:
             const plotOk = await verifyPlotMatch(query, p.title, tmdbOverview);
             if (!plotOk) return unclear();
           }
+        }
+        if (/\s\d{1,2}\s*$/.test(query.trim()) && !titlesMatchNative(query, p.title)) {
+          return notFound();
         }
         return found({ title: p.title, type: verifiedType });
       }
