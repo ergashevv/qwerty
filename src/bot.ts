@@ -250,9 +250,14 @@ async function bootstrap(): Promise<void> {
 
       await ctx.reply(
         `📊 <b>Statistika</b>\n\n` +
-          `👥 ${aud.totalUsers}  |  ✅ ${activeUsers}  |  🚫 ${blockedCount}\n` +
-          `🟢 ${aud.dau}  ·  📅 ${aud.wau}  ·  🗓 ${aud.mau}\n\n` +
-          `✅ ${fb.yes}  ·  ❌ ${fb.no}  ·  🎯 ${pct}% (${fbTotal})`,
+          `👥 Jami: ${aud.totalUsers}  |  ✅ Aktiv: ${activeUsers}  |  🚫 Bloklagan: ${blockedCount}\n\n` +
+          `Bugungi faollik\n` +
+          `🟢 Bugun: ${aud.dau}\n` +
+          `📅 Hafta: ${aud.wau}\n` +
+          `🗓 Oy: ${aud.mau}\n\n` +
+          `Natija\n` +
+          `✅ To'g'ri: ${fb.yes}  ❌ Xato: ${fb.no}\n` +
+          `🎯 Aniqlik: ${pct}%  (jami ${fbTotal} javob)`,
         { parse_mode: 'HTML' }
       );
     } catch {
