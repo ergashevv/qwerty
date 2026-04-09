@@ -19,6 +19,7 @@ jobs:
           script: |
             cd ~/qwerty
             git pull origin main
-            npm install --production
+            npm install --omit=dev
+            node -e "require.resolve('openai')" || { echo "openai o'rnatilmagan — node_modules ni tekshiring"; exit 1; }
             npm run build
             pm2 restart kinova-bot
