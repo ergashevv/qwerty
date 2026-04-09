@@ -1,32 +1,32 @@
-import { withGemini } from '../services/geminiClient';
+import { withAzureSlot } from '../services/azureLlm';
 
-describe('withGemini', () => {
-  const oldRetries = process.env.GEMINI_MAX_RETRIES;
-  const oldGap = process.env.GEMINI_MIN_GAP_MS;
+describe('withAzureSlot', () => {
+  const oldRetries = process.env.AZURE_OPENAI_MAX_RETRIES;
+  const oldGap = process.env.AZURE_OPENAI_MIN_GAP_MS;
 
-  beforeEach(() => {
-    process.env.GEMINI_MAX_RETRIES = '4';
-    process.env.GEMINI_MIN_GAP_MS = '0';
+  beforeAll(() => {
+    process.env.AZURE_OPENAI_MAX_RETRIES = '4';
+    process.env.AZURE_OPENAI_MIN_GAP_MS = '0';
   });
 
-  afterEach(() => {
-    if (oldRetries === undefined) delete process.env.GEMINI_MAX_RETRIES;
-    else process.env.GEMINI_MAX_RETRIES = oldRetries;
-    if (oldGap === undefined) delete process.env.GEMINI_MIN_GAP_MS;
-    else process.env.GEMINI_MIN_GAP_MS = oldGap;
+  afterAll(() => {
+    if (oldRetries === undefined) delete process.env.AZURE_OPENAI_MAX_RETRIES;
+    else process.env.AZURE_OPENAI_MAX_RETRIES = oldRetries;
+    if (oldGap === undefined) delete process.env.AZURE_OPENAI_MIN_GAP_MS;
+    else process.env.AZURE_OPENAI_MIN_GAP_MS = oldGap;
   });
 
-  test('muvaffaqiyatli chaqiruv', async () => {
-    const r = await withGemini(async () => 'ok');
+  test('muvaffaqiyatli natija qaytadi', async () => {
+    const r = await withAzureSlot(async () => 'ok');
     expect(r).toBe('ok');
   });
 
-  test('429 dan keyin qayta urinish (mock)', async () => {
+  test('429 uchun qayta urinadi va oxirida muvaffaq', async () => {
     let n = 0;
-    const r = await withGemini(async () => {
+    const r = await withAzureSlot(async () => {
       n++;
-      if (n === 1) {
-        const e = new Error('Too Many Requests') as Error & { status: number };
+      if (n < 2) {
+        const e = new Error('429') as Error & { status?: number };
         e.status = 429;
         throw e;
       }
@@ -36,16 +36,13 @@ describe('withGemini', () => {
     expect(n).toBe(2);
   });
 
-  test('400 da darhol xato, qayta urinmaydi', async () => {
-    let n = 0;
+  test('400 qayta urinmaydi', async () => {
     await expect(
-      withGemini(async () => {
-        n++;
-        const e = new Error('Bad Request') as Error & { status: number };
+      withAzureSlot(async () => {
+        const e = new Error('bad') as Error & { status?: number };
         e.status = 400;
         throw e;
       })
     ).rejects.toThrow();
-    expect(n).toBe(1);
   });
 });

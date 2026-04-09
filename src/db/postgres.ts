@@ -425,7 +425,7 @@ export async function initPostgresSchema(): Promise<void> {
     ON survey_broadcast_sent (campaign_id, created_at DESC)
   `);
 
-  /** Gemini: har bir generateContent — tokenlar (dashboard / byudjet) */
+  /** LLM tokenlar (Azure); jadval nomi tarixiy */
   await p.query(`
     CREATE TABLE IF NOT EXISTS gemini_usage (
       id BIGSERIAL PRIMARY KEY,
@@ -442,6 +442,15 @@ export async function initPostgresSchema(): Promise<void> {
   `);
   await p.query(`
     CREATE INDEX IF NOT EXISTS idx_gemini_usage_user_time ON gemini_usage (telegram_id, created_at DESC)
+  `);
+
+  /** Bot runtime flaglari (admin commandlar orqali boshqariladi) */
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS bot_runtime_flags (
+      flag_key TEXT PRIMARY KEY,
+      flag_value TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
   `);
 }
 
@@ -472,6 +481,33 @@ export async function insertAnalyticsEvent(
     ]);
   } catch (e) {
     console.warn('analytics_events:', (e as Error).message);
+  }
+}
+
+export async function getBotRuntimeFlag(flagKey: string): Promise<string | null> {
+  try {
+    const r = await getPostgresPool().query(
+      `SELECT flag_value FROM bot_runtime_flags WHERE flag_key = $1 LIMIT 1`,
+      [flagKey]
+    );
+    return (r.rows[0]?.flag_value as string | undefined) ?? null;
+  } catch (e) {
+    console.warn('bot_runtime_flags get:', (e as Error).message?.slice(0, 120));
+    return null;
+  }
+}
+
+export async function setBotRuntimeFlag(flagKey: string, flagValue: string): Promise<void> {
+  try {
+    await getPostgresPool().query(
+      `INSERT INTO bot_runtime_flags (flag_key, flag_value, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (flag_key)
+       DO UPDATE SET flag_value = EXCLUDED.flag_value, updated_at = NOW()`,
+      [flagKey, flagValue]
+    );
+  } catch (e) {
+    console.warn('bot_runtime_flags set:', (e as Error).message?.slice(0, 120));
   }
 }
 
@@ -528,7 +564,13 @@ export async function runAnalyticsRetention(): Promise<void> {
     console.warn('analytics retention:', (e as Error).message);
   }
 
-  const geminiUsageDays = Math.min(365, Math.max(14, parseInt(process.env.GEMINI_USAGE_RETENTION_DAYS || '90', 10)));
+  const geminiUsageDays = Math.min(
+    365,
+    Math.max(
+      14,
+      parseInt(process.env.LLM_USAGE_RETENTION_DAYS || process.env.GEMINI_USAGE_RETENTION_DAYS || '90', 10)
+    )
+  );
   try {
     const gr = await pool.query(`DELETE FROM gemini_usage WHERE created_at < $1`, [
       Math.floor(Date.now() / 1000) - geminiUsageDays * 86400,

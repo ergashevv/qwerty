@@ -1,6 +1,6 @@
 import { tapGeminiGenerateContent, recordGeminiUsage } from '../services/geminiUsage';
-import { runWithGeminiUsageContext, getGeminiUsageTelegramId } from '../services/geminiUsageContext';
-import type { GenerateContentResult } from '@google/generative-ai';
+import { runWithLlmUsageContext, getLlmUsageTelegramId } from '../services/llmUsageContext';
+import type { LegacyGeminiGenerateResult } from '../services/geminiUsage';
 
 describe('recordGeminiUsage', () => {
   test('usageMetadata bo‘lmasa — xotira/suhbat buzilmaydi', () => {
@@ -10,7 +10,7 @@ describe('recordGeminiUsage', () => {
   });
 
   test('tapGeminiGenerateContent — javobdan keyin result qaytadi', async () => {
-    const fake: GenerateContentResult = {
+    const fake: LegacyGeminiGenerateResult = {
       response: {
         text: () => '{}',
         usageMetadata: {
@@ -18,23 +18,23 @@ describe('recordGeminiUsage', () => {
           candidatesTokenCount: 5,
           totalTokenCount: 15,
         },
-      } as GenerateContentResult['response'],
+      },
     };
     const out = await tapGeminiGenerateContent('unit', Promise.resolve(fake));
-    expect(out.response.usageMetadata?.totalTokenCount).toBe(15);
+    expect(out.response?.usageMetadata?.totalTokenCount).toBe(15);
   });
 });
 
-describe('runWithGeminiUsageContext', () => {
+describe('runWithLlmUsageContext', () => {
   test('telegramId berilganda store mavjud', async () => {
-    await runWithGeminiUsageContext(42, async () => {
-      expect(getGeminiUsageTelegramId()).toBe(42);
+    await runWithLlmUsageContext(42, async () => {
+      expect(getLlmUsageTelegramId()).toBe(42);
     });
   });
 
   test('telegramId yo‘q — store bo‘sh', async () => {
-    await runWithGeminiUsageContext(undefined, async () => {
-      expect(getGeminiUsageTelegramId()).toBeUndefined();
+    await runWithLlmUsageContext(undefined, async () => {
+      expect(getLlmUsageTelegramId()).toBeUndefined();
     });
   });
 });

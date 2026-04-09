@@ -5,6 +5,9 @@ services:
     image: docker.io/searxng/searxng:latest
     container_name: kinova-searxng
     restart: unless-stopped
+    environment:
+      # Aks holda tom mount fayllar root/searxng ga o'tadi — ubuntu tahrirlay olmaydi
+      - FORCE_OWNERSHIP=false
     ports:
       - "127.0.0.1:8080:8080"
     volumes:

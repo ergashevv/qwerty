@@ -688,12 +688,10 @@ function dashboardPage(logoHref: string | null): string {
       </div>
     </div>
 
-    <div class="section-title" style="margin-top:8px">Gemini API (token)</div>
+    <div class="section-title" style="margin-top:8px">LLM tokenlar (Azure OpenAI)</div>
     <p class="panel-note" style="margin:0 0 18px;max-width:900px;line-height:1.5">
-      Har bir model javobidagi <strong>usageMetadata</strong> jamlanadi (billing bilan yaqin). Sarfni keskin boshqarish:
-      <code style="font-size:0.85em">GEMINI_MAX_VERIFY</code> (tasdiq urinishlari),
-      <code style="font-size:0.85em">REELS_FRAME_OFFSETS_SEC</code> (Reels kadrlar soni),
-      grounding: <code style="font-size:0.85em">GEMINI_GROUNDING_TEXT_SEARCH=false</code>.
+      Jadval nomi tarixiy: <code>gemini_usage</code>. Yozuvlar Azure <code>chat.completions</code> usage dan.
+      Tasdiq soni: <code>LLM_MAX_VERIFY</code> (yoki <code>GEMINI_MAX_VERIFY</code>), Reels: <code>REELS_FRAME_OFFSETS_SEC</code>.
     </p>
     <div class="dashboard-row" style="grid-template-columns: 1fr 1fr;">
       <div class="panel">

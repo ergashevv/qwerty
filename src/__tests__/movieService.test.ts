@@ -304,7 +304,7 @@ describe('tmdbSearch — mocked', () => {
 
     const result = await tmdbSearch('Temir Odam');
     expect(result?.result.title).toBe('Temir (Turkish film)');
-    // identifyFromText titlesMatch bilan buni filtr qiladi va Gemini LLM ga o'tadi
+    // identifyFromText titlesMatch bilan buni filtr qiladi va Azure LLM ga o'tadi
   });
 
   test('serialni to\'g\'ri aniqlaydi (tv type)', async () => {
@@ -397,23 +397,23 @@ describe('identifyFromText — to\'liq pipeline', () => {
         ],
       },
     });
-    // Gemini: test key bilan ishlamaydi → null
+    // Azure LLM: test key bilan ishlamaydi → null
 
     const result = await identifyFromText('Some Unknown Movie 1987');
     console.log(`[TUZATILDI] identifyFromText: TMDB "Wrong Movie Entirely" filtr qilindi → ${JSON.stringify(result)}`);
     // Tuzatildi: titlesMatch "Wrong Movie Entirely" vs "Some Unknown Movie 1987" → false → filtr
-    expect(result).toBeNull(); // null — TMDB natijasi mos kelmadi, Gemini mock yo'q
+    expect(result).toBeNull(); // null — TMDB natijasi mos kelmadi, LLM mock yo'q
   });
 
-  test('tarjima va tavsif bilan — Gemini chaqirilishi kerak', async () => {
+  test('tarjima va tavsif bilan — Azure LLM chaqirilishi kerak', async () => {
     // OMDB: topilmaydi
     mockedAxios.get.mockResolvedValueOnce({ data: { Search: [] } });
     // TMDB: topilmaydi
     mockedAxios.get.mockResolvedValueOnce({ data: { results: [] } });
 
-    // Gemini API mock — bu test real Gemini API-siz bajariladi
+    // Azure chat completions — bu test real API-siz bajariladi
     const result = await identifyFromText('qamoqdagi oddiy odam haqida turk filmi');
-    console.log(`[BUG TESTI] Tavsifdan film: ${JSON.stringify(result)} — Gemini chaqirilishi kerak`);
+    console.log(`[BUG TESTI] Tavsifdan film: ${JSON.stringify(result)} — Azure LLM chaqirilishi kerak`);
   });
 });
 

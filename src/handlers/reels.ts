@@ -23,7 +23,7 @@ import { identifyMovieFromReelVideo, type ReelsIdentifyResult } from '../service
 import { REELS_LIMIT_PER_WINDOW, REELS_WINDOW_SECONDS } from '../config/limits';
 import { STATUS_DETAILS_LINES, STATUS_IDENTIFY_LINES, withRotatingStatus } from './rotatingStatus';
 import { ackTyping, safeEditOrNotify } from '../utils/safeTelegram';
-import { runWithGeminiUsageContext } from '../services/geminiUsageContext';
+import { runWithLlmUsageContext } from '../services/llmUsageContext';
 import {
   extractUserHintBesideFirstUrl,
   normalizeVideoUrlForCache,
@@ -195,7 +195,7 @@ export async function handleVideoLink(ctx: Context, videoUrl: string, opts: Hand
     };
 
     try {
-      await runWithGeminiUsageContext(userId, async () =>
+      await runWithLlmUsageContext(userId, async () =>
         deliverResolvedReelsResult(ctx, {
           userId,
           chatId,
@@ -251,7 +251,7 @@ export async function handleVideoLink(ctx: Context, videoUrl: string, opts: Hand
 
     const outcome = await enqueueReelsJob(async () => {
       await ctx.api.editMessageText(chatId, msgId, c.download);
-      return runWithGeminiUsageContext(userId, async () =>
+      return runWithLlmUsageContext(userId, async () =>
         withRotatingStatus(
           ctx,
           chatId,
@@ -272,12 +272,12 @@ export async function handleVideoLink(ctx: Context, videoUrl: string, opts: Hand
         if (fb && fb.candidates.length > 0) {
           failText +=
             `\n\n🎭 <b>Taxminiy tanilgan aktyor</b>: ${fb.actorNames.slice(0, 2).join(', ')}\n` +
-            `Quyidagi <i>taxminiy</i> filmlardan biri bo‘lishi mumkin — Google’da oching:`;
+            `Quyidagi <i>taxminiy</i> filmlardan biri bo‘lishi mumkin — qidiruvda oching:`;
           replyMarkup = {
             inline_keyboard: fb.candidates.map((c, i) => [
               {
                 text: `${i + 1}. ${c.title.length > 46 ? `${c.title.slice(0, 45)}…` : c.title}`,
-                url: `https://www.google.com/search?q=${encodeURIComponent(`${c.title} film`)}`,
+                url: `https://duckduckgo.com/?q=${encodeURIComponent(`${c.title} film`)}`,
               },
             ]),
           };
@@ -291,7 +291,7 @@ export async function handleVideoLink(ctx: Context, videoUrl: string, opts: Hand
       return;
     }
 
-    await runWithGeminiUsageContext(userId, async () =>
+    await runWithLlmUsageContext(userId, async () =>
       deliverResolvedReelsResult(ctx, {
         userId,
         chatId,

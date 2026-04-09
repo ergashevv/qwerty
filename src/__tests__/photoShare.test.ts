@@ -50,7 +50,7 @@ describe('buildTelegramShareUrl', () => {
     expect(text).not.toMatch(/Tomosha havolalari/);
     expect(text).not.toMatch(/Poster va barcha havolalar/);
     expect(text).not.toMatch(/https:\/\/uzbeklar/);
-    expect(text).not.toMatch(/https:\/\/www\.google\.com\/search/);
+    expect(text).not.toMatch(/https:\/\/duckduckgo\.com\/\?q=/);
   });
 
   it('juda uzun sarlavhada ham URL chegarada ishlaydi', () => {

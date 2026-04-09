@@ -38,6 +38,12 @@ import {
 } from './messages/feedback';
 import { handleProblemReportUnsupportedMedia } from './handlers/problemReportWrongMedia';
 import { escHtml } from './handlers/photo';
+import {
+  getChannelPromoKeyboard,
+  getChannelPromoMessageHtml,
+  isChannelPromoEnabled,
+  setChannelPromoEnabled,
+} from './services/channelPromo';
 
 /** `t.me/bot?start=feedback` — xabar matni: `/start feedback` */
 const START_PAYLOAD_FEEDBACK = 'feedback';
@@ -265,6 +271,151 @@ async function bootstrap(): Promise<void> {
     }
   });
 
+  bot.command('ad', async (ctx) => {
+    if (!isAdminTelegram(ctx.from?.id)) {
+      await ctx.reply('⛔ Bu buyruq faqat admin uchun.');
+      return;
+    }
+
+    const raw = ctx.message?.text ?? '';
+    const arg = raw.replace(/^\/ad(@\w+)?\s*/i, '').trim().toLowerCase();
+
+    if (!arg || arg === 'status') {
+      const enabled = await isChannelPromoEnabled(true);
+      await ctx.reply(
+        `📣 Kanal reklama holati: <b>${enabled ? 'ON' : 'OFF'}</b>\n\n` +
+          `Boshqaruv:\n` +
+          `<code>/ad on</code> — yoqish\n` +
+          `<code>/ad off</code> — o‘chirish\n` +
+          `<code>/ad status</code> — holat\n` +
+          `<code>/ad sendall</code> — hammaga bir martalik yuborish`,
+        { parse_mode: 'HTML' }
+      );
+      return;
+    }
+
+    if (arg === 'on') {
+      await setChannelPromoEnabled(true);
+      await ctx.reply(
+        '✅ Kanal reklama yoqildi.\n\n' +
+          'Endi muvaffaqiyatli natijalardan keyin bot @kinovaai kanaliga obuna bo‘lish xabarini yuboradi.'
+      );
+      return;
+    }
+
+    if (arg === 'off') {
+      await setChannelPromoEnabled(false);
+      await ctx.reply('✅ Kanal reklama o‘chirildi.');
+      return;
+    }
+
+    if (arg === 'sendall' || arg === 'broadcast') {
+      const adminUid = ctx.from?.id;
+      const rows = await getPostgresPool().query(
+        `SELECT telegram_id FROM users WHERE blocked_at IS NULL ORDER BY telegram_id ASC`
+      );
+      const ids = Array.from(
+        new Set(
+          (rows.rows
+            .map((r) => Number(r.telegram_id))
+            .filter((n) => Number.isFinite(n) && n > 0) as number[]).concat(
+            adminUid != null ? [adminUid] : []
+          )
+        )
+      );
+
+      const total = ids.length;
+      let ok = 0;
+      let fail = 0;
+      let failChatNotFound = 0;
+      let failBlocked = 0;
+      let failOther = 0;
+
+      const progress = await ctx.reply(
+        `⏳ <b>Kanal reklama xabari yuborilmoqda…</b>\nJarayon: 0 / ${total}`,
+        { parse_mode: 'HTML' }
+      );
+
+      const classify = (e: unknown): 'chat_not_found' | 'blocked' | 'other' => {
+        const raw =
+          e instanceof GrammyError ? e.description : e instanceof Error ? e.message : String(e);
+        const m = raw.toLowerCase();
+        if (m.includes('chat not found')) return 'chat_not_found';
+        if (m.includes('403') || m.includes('forbidden') || m.includes('blocked by the user') || m.includes('bot was blocked')) {
+          return 'blocked';
+        }
+        return 'other';
+      };
+
+      for (let i = 0; i < ids.length; i++) {
+        const chatId = ids[i]!;
+        try {
+          await ctx.api.sendMessage(chatId, getChannelPromoMessageHtml(), {
+            parse_mode: 'HTML',
+            reply_markup: getChannelPromoKeyboard(),
+            link_preview_options: { is_disabled: true },
+          });
+          ok++;
+        } catch (e) {
+          fail++;
+          const kind = classify(e);
+          if (kind === 'chat_not_found') failChatNotFound++;
+          else if (kind === 'blocked') failBlocked++;
+          else failOther++;
+          if (kind === 'blocked') {
+            await getPostgresPool()
+              .query(`UPDATE users SET blocked_at = COALESCE(blocked_at, NOW()) WHERE telegram_id = $1`, [chatId])
+              .catch(() => {});
+          }
+        }
+
+        if ((i + 1) % 25 === 0 || i === ids.length - 1) {
+          await ctx.api
+            .editMessageText(
+              progress.chat.id,
+              progress.message_id,
+              `⏳ <b>Kanal reklama xabari yuborilmoqda…</b>\n` +
+                `Jarayon: ${i + 1} / ${total}\n` +
+                `✅ ${ok}  |  ⚠️ ${fail}`,
+              { parse_mode: 'HTML' }
+            )
+            .catch(() => {});
+        }
+        await new Promise((r) => setTimeout(r, 35));
+      }
+
+      await ctx.api
+        .editMessageText(
+          progress.chat.id,
+          progress.message_id,
+          `📣 <b>Kanal reklama yuborildi</b>\n` +
+            `✅ Muvaffaqiyat: ${ok}\n` +
+            `⚠️ Xato: ${fail} (jami ${total})\n\n` +
+            `<b>Xatolar tafsiloti</b>\n` +
+            `· chat not found: ${failChatNotFound}\n` +
+            `· blocked: ${failBlocked}\n` +
+            `· other: ${failOther}`,
+          { parse_mode: 'HTML' }
+        )
+        .catch(async () => {
+          await ctx.reply(
+            `📣 Yuborish yakunlandi: ✅ ${ok} | ⚠️ ${fail} (jami ${total})`
+          );
+        });
+      return;
+    }
+
+    await ctx.reply(
+      '❓ Noto‘g‘ri format.\n\n' +
+        'To‘g‘ri ishlatish:\n' +
+        '<code>/ad on</code>\n' +
+        '<code>/ad off</code>\n' +
+        '<code>/ad status</code>\n' +
+        '<code>/ad sendall</code>',
+      { parse_mode: 'HTML' }
+    );
+  });
+
   bot.on('my_chat_member', async (ctx) => {
     const uid = ctx.from?.id;
     if (!uid) return;
@@ -370,7 +521,7 @@ async function bootstrap(): Promise<void> {
 
   /**
    * `bot.start()` barcha update'larni ketma-ket qayta ishlaydi — bir nechta
-   * foydalanuvchi uzoq foto/Gemini qidiruvida bo‘lsa, boshqa userlar callback
+   * foydalanuvchi uzoq foto/LLM jarayonida bo‘lsa, boshqa userlar callback
    * tugmalari 10s dan kech chiqadi va Telegram "query is too old" beradi.
    * `run()` parallel sink (default ~500) — `sequentialize` har bir user uchun
    * tartibni saqlaydi.

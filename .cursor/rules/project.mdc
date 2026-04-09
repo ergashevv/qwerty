@@ -8,7 +8,7 @@ alwaysApply: true
 - **Runtime**: Node.js 20 + TypeScript (`ts-node` dev, `tsc` production)
 - **Bot**: Telegraf (Telegram Bot API)
 - **DB**: PostgreSQL 16 — VPS da lokal (`localhost:5432`, database: `kinovadb`)
-- **AI**: Anthropic Claude + Google Gemini (rasm/matn tahlili)
+- **AI**: **Azure OpenAI** (LLM + vision); veb fragmentlar — **SearXNG** (o‘z VPS, `SEARXNG_URL`)
 - **Deploy**: GitHub Actions → SSH → PM2 (`pm2 restart kinova-bot`)
 
 ## VPS
@@ -22,19 +22,19 @@ alwaysApply: true
 - `src/db/postgres.ts` — DB pool, schema, analytics
 - `src/handlers/` — text, photo, reels handlerlari
 - `src/services/movieService.ts` — kino qidirish logikasi
+- `src/services/azureLlm.ts` — Azure OpenAI
+- `deploy/searxng/` — SearXNG Docker (ixtiyoriy)
 - `SERVER_SETUP.md` — server konfiguratsiya hujjati
-- `scripts/setup-server.sh` — yangi server setup
-- `scripts/backup-db.sh` — DB backup (cron: har kuni 03:00)
 - `.github/workflows/deploy.yml` — CI/CD
 
 ## .env (VPS da qo'lda, git da yo'q)
-Asosiy o'zgaruvchilar:
-- `BOT_TOKEN` — Telegram bot token
-- `DATABASE_URL` — `postgresql://kinovabot:...@localhost:5432/kinovadb`
-- `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`
-- `TMDB_API_KEY`, `OMDB_API_KEY`, `BRAVE_SEARCH_API_KEY` (ixtiyoriy fallback: `GOOGLE_CSE_KEY` / `GOOGLE_CSE_ID`)
+- `BOT_TOKEN`, `DATABASE_URL`
+- `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT` (+ ixtiyoriy `AZURE_OPENAI_DEPLOYMENT_VISION`)
+- `SEARXNG_URL` — veb qidiruv (ixtiyoriy; bo‘lmasa TMDB/LLM yo‘llari)
+- `TMDB_API_KEY`, `OMDB_API_KEY`
+- `AWS_*` — Rekognition (ixtiyoriy)
 
-## Developer (Nathan) ulanish
+## Developer ulanish
 SSH tunnel orqali:
 ```bash
 ssh -L 5433:localhost:5432 ubuntu@57.131.46.71 -N
@@ -42,13 +42,8 @@ ssh -L 5433:localhost:5432 ubuntu@57.131.46.71 -N
 ```
 
 ## DB Schema
-`initPostgresSchema()` startup da avtomatik yaratadi:
-- `users` — foydalanuvchilar
-- `movie_cache` — kino cache
-- `analytics_events` — statistika (JSONB)
-- `photo_requests`, `reels_requests`, `search_requests` — limitlash
-- `pending_identification_feedback` — feedback queue
-- `user_activity_day` — kunlik faollik
+`initPostgresSchema()` startup da avtomatik yaratadi (qisqacha):
+- `users`, `movie_cache`, `analytics_events`, limit jadvallari, `gemini_usage` (Azure tokenlar, tarixiy nom)
 
 ## Tarix
-- Avval: SQLite → keyin Neon Postgres → hozir VPS lokal Postgres (2026-03-29)
+- SQLite → Neon → VPS lokal Postgres (2026-03-29); Google/Bing/Brave veb API olib tashlangan, SearXNG + Azure.

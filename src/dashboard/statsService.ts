@@ -74,7 +74,7 @@ export interface UserActivityRow {
   feedbackTotal30d: number;
 }
 
-/** Gemini API — `usageMetadata` dan jamlangan (billing bilan yaqin) */
+/** LLM tokenlar — `gemini_usage` jadvalidan (Azure usage) */
 export interface GeminiUsageTotals {
   totalTokens: number;
   promptTokens: number;
@@ -150,7 +150,7 @@ export interface DashboardPayload {
   };
   /** So‘nggi 14 kun — kunlik, manba bo‘yicha */
   searchRequestsByDay14: SearchRequestDayRow[];
-  /** Gemini tokenlar — user va operatsiya bo‘yicha (yozuv boshlanganidan keyin to‘ldiriladi) */
+  /** LLM tokenlar — user va operatsiya bo‘yicha */
   geminiUsage: GeminiUsageSnapshot | null;
 }
 

@@ -25,7 +25,7 @@ import { setUserTextContext } from '../services/userContext';
 import { completeSurveyProblemText, getSurveyProblemPending } from '../db/surveyBroadcast';
 import { tryCompleteProblemReport } from './problemReportSubmit';
 import { ackTyping, safeEditOrNotify, safeReply } from '../utils/safeTelegram';
-import { runWithGeminiUsageContext } from '../services/geminiUsageContext';
+import { runWithLlmUsageContext } from '../services/llmUsageContext';
 
 export async function handleText(ctx: Context): Promise<void> {
   const text = ctx.message?.text?.trim();
@@ -62,7 +62,7 @@ export async function handleText(ctx: Context): Promise<void> {
   }
 
   if (text.startsWith('/')) {
-    const adminHint = process.env.ADMIN_TELEGRAM_ID?.trim() ? ', /stats (faqat admin)' : '';
+    const adminHint = process.env.ADMIN_TELEGRAM_ID?.trim() ? ', /stats, /ad (faqat admin)' : '';
     await safeReply(
       ctx,
       '❓ Bunday buyruq topilmadi yoki format noto‘g‘ri.\n\n' +
@@ -121,7 +121,7 @@ export async function handleText(ctx: Context): Promise<void> {
 
   let processing: { message_id: number } | undefined;
   try {
-    await runWithGeminiUsageContext(userId, async () => {
+    await runWithLlmUsageContext(userId, async () => {
     processing = await ctx.reply('🔍 Qidirilmoqda...');
     void ctx.api.sendChatAction(ctx.chat!.id, 'typing');
     void recordSearchRequest(userId, 'text', { queryText: text }).catch(() => {});

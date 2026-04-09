@@ -2,7 +2,7 @@ import type { Context } from 'grammy';
 
 /**
  * Telegram darhol “bot yozmoqda” ko‘rsatadi — await qilinmaydi, og‘ir ishni bloklamaydi.
- * Har qanday uzoq jarayondan oldin chaqiring (DB, Gemini, yt-dlp va hokazo).
+ * Har qanday uzoq jarayondan oldin chaqiring (DB, LLM, yt-dlp va hokazo).
  */
 export function ackTyping(ctx: Context): void {
   const id = ctx.chat?.id;

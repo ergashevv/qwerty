@@ -17,9 +17,27 @@ server:
   secret_key: "${SECRET}"
   limiter: false
   image_proxy: true
+
+# Kinova \`format=json\` — yo'q bo'lsa SearXNG 403 qaytaradi
+search:
+  formats:
+    - html
+    - json
 EOF
   chmod 600 config/settings.yml
   echo "✅ config/settings.yml yaratildi"
+fi
+
+# Eski konfigda JSON o'chiq bo'lsa 403 — bir marta qo'shamiz
+if [[ -f config/settings.yml ]] && ! grep -qE '^\s*-\s*json\s*$' config/settings.yml; then
+  cat >> config/settings.yml << 'EOF'
+
+search:
+  formats:
+    - html
+    - json
+EOF
+  echo "✅ search.formats: json qo'shildi (403 tuzatish)"
 fi
 
 if ! command -v docker >/dev/null; then
@@ -29,6 +47,7 @@ if ! command -v docker >/dev/null; then
 fi
 
 docker compose up -d
+docker compose restart searxng 2>/dev/null || true
 echo ""
 echo "SearXNG tinglayapti: http://127.0.0.1:8080"
 echo "Kinova ~/qwerty/.env ga qo'shing:"

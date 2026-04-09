@@ -40,6 +40,11 @@ import { getProblemReportPending } from '../db/feedbackProblemReport';
 import { tryCompleteProblemReport } from './problemReportSubmit';
 import { feedbackModeReplyMarkup } from './feedbackModeBack';
 import { PROBLEM_REPORT_PHOTO_NEED_CAPTION_HTML } from '../messages/feedback';
+import {
+  getChannelPromoKeyboard,
+  getChannelPromoMessageHtml,
+  isChannelPromoEnabled,
+} from '../services/channelPromo';
 
 export async function handlePhoto(ctx: Context): Promise<void> {
   const userId  = ctx.from?.id;
@@ -429,6 +434,14 @@ export async function sendMovieResult(
     await ctx.reply(caption, {
       parse_mode: 'HTML',
       reply_markup: replyMarkup,
+    });
+  }
+
+  if (await isChannelPromoEnabled()) {
+    await ctx.reply(getChannelPromoMessageHtml(), {
+      parse_mode: 'HTML',
+      reply_markup: getChannelPromoKeyboard(),
+      link_preview_options: { is_disabled: true },
     });
   }
 
