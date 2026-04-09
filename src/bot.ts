@@ -44,6 +44,10 @@ import {
   isChannelPromoEnabled,
   setChannelPromoEnabled,
 } from './services/channelPromo';
+import {
+  getUserChannelPromoState,
+  markUserChannelPromoBroadcastSent,
+} from './db/postgres';
 
 /** `t.me/bot?start=feedback` — xabar matni: `/start feedback` */
 const START_PAYLOAD_FEEDBACK = 'feedback';
@@ -326,6 +330,7 @@ async function bootstrap(): Promise<void> {
       );
 
       const total = ids.length;
+      let skippedAlreadySent = 0;
       let ok = 0;
       let fail = 0;
       let failChatNotFound = 0;
@@ -350,13 +355,24 @@ async function bootstrap(): Promise<void> {
 
       for (let i = 0; i < ids.length; i++) {
         const chatId = ids[i]!;
+        const st = await getUserChannelPromoState(chatId);
+        if (st?.broadcastSentAt != null) {
+          skippedAlreadySent++;
+          continue;
+        }
         try {
-          await ctx.api.sendMessage(chatId, getChannelPromoMessageHtml(), {
-            parse_mode: 'HTML',
-            reply_markup: getChannelPromoKeyboard(),
-            link_preview_options: { is_disabled: true },
-          });
+          await Promise.race([
+            ctx.api.sendMessage(chatId, getChannelPromoMessageHtml(), {
+              parse_mode: 'HTML',
+              reply_markup: getChannelPromoKeyboard(),
+              link_preview_options: { is_disabled: true },
+            }),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('sendMessage timeout')), 12000)
+            ),
+          ]);
           ok++;
+          await markUserChannelPromoBroadcastSent(chatId, Math.floor(Date.now() / 1000));
         } catch (e) {
           fail++;
           const kind = classify(e);
@@ -377,7 +393,8 @@ async function bootstrap(): Promise<void> {
               progress.message_id,
               `⏳ <b>Kanal reklama xabari yuborilmoqda…</b>\n` +
                 `Jarayon: ${i + 1} / ${total}\n` +
-                `✅ ${ok}  |  ⚠️ ${fail}`,
+                `✅ ${ok}  |  ⚠️ ${fail}` +
+                `\n⏭ ${skippedAlreadySent} (oldin yuborilgan)`,
               { parse_mode: 'HTML' }
             )
             .catch(() => {});
@@ -391,7 +408,9 @@ async function bootstrap(): Promise<void> {
           progress.message_id,
           `📣 <b>Kanal reklama yuborildi</b>\n` +
             `✅ Muvaffaqiyat: ${ok}\n` +
-            `⚠️ Xato: ${fail} (jami ${total})\n\n` +
+            `⚠️ Xato: ${fail}\n` +
+            `⏭ Skip (oldin yuborilgan): ${skippedAlreadySent}\n` +
+            `Jami candidate: ${total}\n\n` +
             `<b>Xatolar tafsiloti</b>\n` +
             `· chat not found: ${failChatNotFound}\n` +
             `· blocked: ${failBlocked}\n` +

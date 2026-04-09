@@ -462,6 +462,12 @@ export async function initPostgresSchema(): Promise<void> {
       subscribed_checked_at BIGINT
     )
   `);
+  await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE user_channel_promo_state ADD COLUMN broadcast_sent_at BIGINT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `);
 }
 
 export async function withPgClient<T>(fn: (c: PoolClient) => Promise<T>): Promise<T | null> {
@@ -526,6 +532,7 @@ export interface UserChannelPromoState {
   lastShownAt: number | null;
   subscribed: boolean;
   subscribedCheckedAt: number | null;
+  broadcastSentAt: number | null;
 }
 
 export async function getUserChannelPromoState(
@@ -548,6 +555,8 @@ export async function getUserChannelPromoState(
       subscribed: Boolean(row.subscribed),
       subscribedCheckedAt:
         row.subscribed_checked_at == null ? null : Number(row.subscribed_checked_at),
+      broadcastSentAt:
+        row.broadcast_sent_at == null ? null : Number(row.broadcast_sent_at),
     };
   } catch (e) {
     console.warn('user_channel_promo_state get:', (e as Error).message?.slice(0, 120));
@@ -587,6 +596,23 @@ export async function setUserChannelPromoSubscribed(
     );
   } catch (e) {
     console.warn('user_channel_promo_state subscribed:', (e as Error).message?.slice(0, 120));
+  }
+}
+
+export async function markUserChannelPromoBroadcastSent(
+  telegramId: number,
+  sentAtEpochSec: number
+): Promise<void> {
+  try {
+    await getPostgresPool().query(
+      `INSERT INTO user_channel_promo_state (telegram_id, broadcast_sent_at)
+       VALUES ($1, $2)
+       ON CONFLICT (telegram_id)
+       DO UPDATE SET broadcast_sent_at = EXCLUDED.broadcast_sent_at`,
+      [telegramId, sentAtEpochSec]
+    );
+  } catch (e) {
+    console.warn('user_channel_promo_state broadcast_sent:', (e as Error).message?.slice(0, 120));
   }
 }
 
