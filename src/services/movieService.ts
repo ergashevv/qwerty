@@ -1589,6 +1589,42 @@ function isAllowedWatchUrl(url: string, title?: string): boolean {
 }
 
 /**
+ * Sarlava oxiridagi qism raqami (2–15), yillar bilan adashmaslik — `sequelNumberMismatch` bilan bir xil oralig‘.
+ */
+function endSequelNumInSlug(titleSlug: string): number | null {
+  const m = titleSlug.match(/\s(\d{1,2})$/);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  if (n >= 2 && n <= 15) return n;
+  return null;
+}
+
+function requiredSequelNumbersForWatchLink(allTitles: string[]): Set<number> {
+  const s = new Set<number>();
+  for (const raw of allTitles) {
+    if (!raw?.trim()) continue;
+    const n = endSequelNumInSlug(slugifyForMatch(raw));
+    if (n != null) s.add(n);
+  }
+  return s;
+}
+
+function haystackHasSequelNumbers(haystack: string, nums: Set<number>): boolean {
+  if (nums.size === 0) return true;
+  for (const n of nums) {
+    const num = String(n);
+    const re = new RegExp(`(^|[^0-9])${num}([^0-9]|$)`);
+    if (!re.test(haystack)) return false;
+  }
+  return true;
+}
+
+/** TMDB sarlavhalaridan kelgan serial raqami snippet/url da alohida token bo‘lmasa, havola rad etiladi (masalan Dhoom 2 ≠ Dhoom 3). */
+export function watchLinkSequelConstraintOk(allTitles: string[], haystack: string): boolean {
+  return haystackHasSequelNumbers(haystack, requiredSequelNumbersForWatchLink(allTitles));
+}
+
+/**
  * Tomosha havolalari qidiruvi: saytlar odatda inglizcha (yoki TMDB original_title) nom bilan.
  * O‘zbekcha tarjima nomi (masalan "Yettinchi farzand") bilan qidiruv bo‘sh chiqishi mumkin.
  */
@@ -1613,6 +1649,10 @@ function isLinkRelevantToMovie(
     slugifyForMatch(result.snippet || ''),
     slugifyForMatch(urlPath),
   ].join(' ');
+
+  const seqNums = requiredSequelNumbersForWatchLink(allTitles);
+  if (!haystackHasSequelNumbers(haystack, seqNums)) return false;
+
   const haystackWords = haystack.split(/\s+/).filter(w => w.length >= 3);
 
   for (const rawTitle of allTitles) {
@@ -1689,12 +1729,26 @@ function relaxedFillFromResults(
   ruResults: WebSearchSnippet[],
   seen: Set<string>,
   finalLinks: WatchLink[],
+  allTitles: string[],
 ): void {
+  const seqNums = requiredSequelNumbersForWatchLink(allTitles);
   for (const item of [...uzResults, ...ruResults]) {
     if (finalLinks.length >= 4) break;
     if (!isAllowedWatchUrl(item.link, item.title)) continue;
     const host = canonHost(item.link);
     if (seen.has(host)) continue;
+    let pathPart = '';
+    try {
+      pathPart = decodeURIComponent(new URL(item.link).pathname).replace(/[-_./]/g, ' ');
+    } catch {
+      pathPart = item.link;
+    }
+    const haystack = [
+      slugifyForMatch(item.title || ''),
+      slugifyForMatch(item.snippet || ''),
+      slugifyForMatch(pathPart),
+    ].join(' ');
+    if (!haystackHasSequelNumbers(haystack, seqNums)) continue;
     seen.add(host);
     const ru = /[а-яё]/i.test(item.title || '') && !/[a-z]{4,}/i.test(item.title || '');
     const t = (item.title || '').length > 50 ? host : item.title;
@@ -1740,7 +1794,7 @@ export async function findWatchLinks(
       collectWatchLinksFromResults(imdb, seen, finalLinks, allTitles, year, imdbId, 'imdb-en', false, 4);
     }
     if (finalLinks.length === 0) {
-      relaxedFillFromResults(r1, [], seen, finalLinks);
+      relaxedFillFromResults(r1, [], seen, finalLinks, allTitles);
     }
     return finalLinks.slice(0, 5);
   }
@@ -1758,7 +1812,7 @@ export async function findWatchLinks(
       collectWatchLinksFromResults(imdb, seen, finalLinks, allTitles, year, imdbId, 'imdb-ru', true, 4);
     }
     if (finalLinks.length === 0) {
-      relaxedFillFromResults(r1, [], seen, finalLinks);
+      relaxedFillFromResults(r1, [], seen, finalLinks, allTitles);
     }
     return finalLinks.slice(0, 5);
   }
@@ -1800,13 +1854,13 @@ export async function findWatchLinks(
     const imdbRes = await webSearch(`${tt} o'zbek tilida смотреть`, 'uz', 'uz');
     collectWatchLinksFromResults(imdbRes, seen, finalLinks, allTitles, year, imdbId, 'imdb', false, 3);
     if (finalLinks.length === 0) {
-      relaxedFillFromResults(imdbRes, [], seen, finalLinks);
+      relaxedFillFromResults(imdbRes, [], seen, finalLinks, allTitles);
     }
   }
 
   // ── Fallback: hech narsa topilmasa — qat'iy filtr olmirish ──────────────
   if (finalLinks.length === 0) {
-    relaxedFillFromResults([...uzRes, ...uzTitleRes], [], seen, finalLinks);
+    relaxedFillFromResults([...uzRes, ...uzTitleRes], [], seen, finalLinks, allTitles);
   }
 
   return finalLinks.slice(0, 5);

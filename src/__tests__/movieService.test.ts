@@ -19,6 +19,7 @@ import {
   tmdbSearch,
   omdbSearch,
   identifyFromText,
+  watchLinkSequelConstraintOk,
 } from '../services/movieService';
 
 jest.mock('axios');
@@ -55,6 +56,28 @@ describe('titlesMatchNative — serial raqami', () => {
   test('"iron man 4" va "Iron Man 4" yoki "Taxi 4" — mos', () => {
     expect(titlesMatchNative('iron man 4', 'Iron Man 4')).toBe(true);
     expect(titlesMatchNative('iron man 4', 'Taxi 4')).toBe(false);
+  });
+});
+
+// ─── 1c. watch link — serial raqami (Dhoom 3 vs boshqa qismlar) ───────────────
+
+describe('watchLinkSequelConstraintOk', () => {
+  const dhoom3 = ['Dhoom 3', 'Dhoom 3'];
+
+  test('faqat "dhoom" bo‘lsa — 3 bo‘lmasa, rad (boshqa qism havolalari)', () => {
+    expect(watchLinkSequelConstraintOk(dhoom3, 'dhoom hind kino smotret')).toBe(false);
+  });
+
+  test('snippetda "3" alohida token bo‘lsa — qabul', () => {
+    expect(watchLinkSequelConstraintOk(dhoom3, 'dhoom 3 uzbek tilida online')).toBe(true);
+  });
+
+  test('yil ichidagi "2013" — 3 ni alohida token deb hisoblamaydi', () => {
+    expect(watchLinkSequelConstraintOk(dhoom3, 'dhoom hind 2013 online')).toBe(false);
+  });
+
+  test('serial raqami yo‘q sarlavha — qo‘shimcha cheklov yo‘q', () => {
+    expect(watchLinkSequelConstraintOk(['Parasite'], 'parasite kino uzbek')).toBe(true);
   });
 });
 
