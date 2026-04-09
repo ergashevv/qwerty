@@ -648,12 +648,12 @@ async function identifyByFaces(base64: string): Promise<MovieIdentified | null> 
   candidates = prioritizeNarrativeCandidates(candidates).sort(sortTmdbByFaceCredits).slice(0, FACE_CANDIDATE_LIMIT);
   console.log('🎬 Candidates:', candidates.map(c => c.title || c.name).join(', '));
 
-  // Bitta qolsa — aniq
+  // Bitta qolsa — yuz tanish xato bo'lishi mumkin; "high" verifydan keyin emas
   if (candidates.length === 1) {
     const c = candidates[0];
     const title = c.title || c.name || '';
     const type: MediaType = (c.media_type === 'tv') ? 'tv' : 'movie';
-    return { title, type, confidence: 'high' };
+    return { title, type, confidence: 'medium' };
   }
 
   // Ko'p nomzod: LLM tanlaydi; topilmasa — TMDB reytingi bo'yicha fallback
@@ -682,7 +682,7 @@ async function llmPickFromCandidates(base64: string, actors: string, candidates:
     .map((s) => s.trim())
     .filter(Boolean);
   if (candidateTitles.length === 0) return null;
-  const userPrompt = `Recognized actors: ${actors}
+    const userPrompt = `Recognized actors: ${actors}
 Candidate movies/shows: ${candidates}
 
 Look at the screenshot carefully. Based on scene details (costumes, setting, lighting, props, visible text in the film frame), choose the best candidate ONLY if it is genuinely plausible.
@@ -692,6 +692,8 @@ IMPORTANT RULES:
 2. If candidates are mostly talk-show/variety entries but the frame looks like a narrative film scene, set confidence to "low" and title to empty.
 3. Use "high" or "medium" only when the chosen candidate is visually consistent with the frame.
 4. If uncertain or generic frame with no clear match, return low confidence with empty title.
+5. If the image is a MOVIE POSTER or KEY ART with obvious typography/title treatment, the candidate MUST match that world: do NOT pick an unrelated live-action show if the art is clearly animated, family-rated musical style, or biblical/epic illustration style.
+6. If the frame is clearly ANIMATED or CGI and a candidate is only a live-action erotic/comedy/drama series with no animation, that candidate is NOT plausible — use "low" and empty title.
 
 Respond ONLY with JSON:
 {"title": "Exact title from candidates", "type": "movie" or "tv", "confidence": "high/medium/low"}`;
@@ -726,20 +728,21 @@ async function identifyByVisionLlm(base64: string, textHint?: string | null): Pr
 The film can be from ANY country: Hollywood, Turkey, Korea, Russia, Kazakhstan, Uzbekistan, Kyrgyzstan, Azerbaijan, India, Iran, or anywhere else. Do NOT bias toward any region.${hintLine}
 
 Key clues to analyze:
-1. Actors' faces — recognize them if possible
-2. Costumes and clothing style (fantasy? period? modern? nomad? prison?)
-3. Setting and location (fantasy world? steppe? city? historical?)
-4. Any visible text (subtitles, watermarks, on-screen logos in any language) — ignore social media UI overlay
-5. Language of subtitles if visible
-6. Overall visual style and production quality
+1. **Theatrical POSTER / key art**: large printed title (e.g. one prominent word like "DAVID") — transcribe that title text literally as the primary answer when legible.
+2. Actors' faces — recognize them if possible (on posters: illustrated faces differ from live-action celebrities)
+3. Costumes/clothing era; animated/CG vs live-action
+4. Setting (biblical epic, fantasy, modern city, etc.)
+5. Any visible text — ignore social media UI chrome only
+6. Overall visual style: family animation, gritty drama, erotic comedy, etc. must stay CONSISTENT with your title
 
 Respond ONLY with JSON:
 {"title": "Exact title or unknown", "type": "movie" or "tv", "confidence": "high/medium/low"}
 
 Rules:
-- Use confidence "high" or "medium" only if you genuinely recognize this specific film.
-- Use "unknown" + "low" if you cannot identify the specific title (not just the genre/region).
-- Do NOT guess a title just because it fits the genre — only respond with a title you actually recognize.`;
+- Use confidence "high" or "medium" only if you genuinely recognize this specific work OR the poster title text is clearly readable.
+- Use "unknown" + "low" if you cannot name the exact release — do NOT substitute a random popular title with a loose thematic link.
+- Never output an unrelated adult live-action series for a bright family-style animated or illustrated poster.
+- Do NOT guess a title just because it fits the genre — only respond with a title you actually recognize or read from the image.`;
     const text = await azureChatVision('identifyByVisionLlm', base64, 'image/jpeg', userPrompt);
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return null;
@@ -849,12 +852,14 @@ async function llmVerifyCandidate(base64: string, candidateTitle: string, mimeTy
 
 CRITICAL RULES:
 1. IGNORE watermarks, channel logos, player UI, timestamps, and social media chrome around the video
-2. Focus on the actual scene: faces, costumes, setting, lighting, live-action vs animation
+2. Focus on the actual scene: faces, costumes, setting, lighting, live-action vs animation, poster typography
 3. If "${candidateTitle}" is ONLY a documentary / clip show ABOUT cinema (not the narrative work), answer false
-4. Answer true if the frame is CONSISTENT with "${candidateTitle}" and you see nothing that clearly contradicts it (same actor present is a strong signal when it matches that work)
-5. Answer false only when you are fairly sure it is a different title, wrong medium, or the setting/era clearly conflicts
-6. Do not require "100% proof" from one still — memorable films often have generic-looking rooms; if it plausibly fits "${candidateTitle}", prefer true
-7. If match is false but you KNOW the exact correct title, set "alternativeTitle" / "alternativeType"; otherwise empty strings
+4. **Medium mismatch**: if the image is clearly ANIMATED, ILLUSTRATED POSTER ART, or family/CG feature style and "${candidateTitle}" is exclusively a live-action adult comedy/drama that looks nothing like this art — answer **false**
+5. **Poster title conflict**: if large readable poster text clearly names a different film than "${candidateTitle}", answer **false**
+6. Answer true if the frame is CONSISTENT with "${candidateTitle}" and you see nothing that clearly contradicts it (same actor present is a strong signal when it matches that work)
+7. Answer false when you are fairly sure it is a different title, wrong medium, or the setting/era clearly conflicts
+8. Do not require "100% proof" from one still — memorable films often have generic-looking rooms; if it plausibly fits "${candidateTitle}" AND medium/genre match, prefer true
+9. If match is false but you KNOW the exact correct title, set "alternativeTitle" / "alternativeType"; otherwise empty strings
 
 Answer ONLY with JSON:
 {"match": true} 
@@ -996,31 +1001,6 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
       return { ok: true, identified: lastAlternative };
     }
     console.log('⚠️ Alternativ sarlavha ham tasdiqlanmadi:', lastAlternative.title);
-  }
-
-  // GPT verify ba'zida juda konservativ bo'ladi; kuchli signal bo'lsa bo'sh qaytarmaymiz.
-  const top = ordered[0];
-  if (top) {
-    const facesStrong =
-      !!faces?.title && faces.confidence === 'high' && titlesMatch(faces.title, top.title);
-    const visionStrong =
-      !!visionLlm?.title && visionLlm.confidence === 'high' && titlesMatch(visionLlm.title, top.title);
-    const singleCandidate =
-      ordered.length === 1 &&
-      (faces?.confidence === 'high' || visionLlm?.confidence === 'high' || faces?.confidence === 'medium');
-
-    if (facesStrong || visionStrong || singleCandidate) {
-      console.log(
-        `✅ Soft fallback: verify rad etdi, lekin signal kuchli — "${top.title}" qaytarildi`
-      );
-      return {
-        ok: true,
-        identified: {
-          ...top,
-          confidence: top.confidence === 'high' ? 'high' : 'medium',
-        },
-      };
-    }
   }
 
   if (!verifyRan) {
