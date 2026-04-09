@@ -452,6 +452,16 @@ export async function initPostgresSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  /** Kanal promo: user darajasida oxirgi ko‘rsatish va obuna holati */
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS user_channel_promo_state (
+      telegram_id BIGINT PRIMARY KEY,
+      last_shown_at BIGINT,
+      subscribed BOOLEAN NOT NULL DEFAULT FALSE,
+      subscribed_checked_at BIGINT
+    )
+  `);
 }
 
 export async function withPgClient<T>(fn: (c: PoolClient) => Promise<T>): Promise<T | null> {
@@ -508,6 +518,75 @@ export async function setBotRuntimeFlag(flagKey: string, flagValue: string): Pro
     );
   } catch (e) {
     console.warn('bot_runtime_flags set:', (e as Error).message?.slice(0, 120));
+  }
+}
+
+export interface UserChannelPromoState {
+  telegramId: number;
+  lastShownAt: number | null;
+  subscribed: boolean;
+  subscribedCheckedAt: number | null;
+}
+
+export async function getUserChannelPromoState(
+  telegramId: number
+): Promise<UserChannelPromoState | null> {
+  try {
+    const r = await getPostgresPool().query(
+      `SELECT telegram_id, last_shown_at, subscribed, subscribed_checked_at
+       FROM user_channel_promo_state
+       WHERE telegram_id = $1
+       LIMIT 1`,
+      [telegramId]
+    );
+    const row = r.rows[0];
+    if (!row) return null;
+    return {
+      telegramId: Number(row.telegram_id),
+      lastShownAt:
+        row.last_shown_at == null ? null : Number(row.last_shown_at),
+      subscribed: Boolean(row.subscribed),
+      subscribedCheckedAt:
+        row.subscribed_checked_at == null ? null : Number(row.subscribed_checked_at),
+    };
+  } catch (e) {
+    console.warn('user_channel_promo_state get:', (e as Error).message?.slice(0, 120));
+    return null;
+  }
+}
+
+export async function markUserChannelPromoShown(
+  telegramId: number,
+  shownAtEpochSec: number
+): Promise<void> {
+  try {
+    await getPostgresPool().query(
+      `INSERT INTO user_channel_promo_state (telegram_id, last_shown_at)
+       VALUES ($1, $2)
+       ON CONFLICT (telegram_id)
+       DO UPDATE SET last_shown_at = EXCLUDED.last_shown_at`,
+      [telegramId, shownAtEpochSec]
+    );
+  } catch (e) {
+    console.warn('user_channel_promo_state shown:', (e as Error).message?.slice(0, 120));
+  }
+}
+
+export async function setUserChannelPromoSubscribed(
+  telegramId: number,
+  subscribed: boolean,
+  checkedAtEpochSec: number
+): Promise<void> {
+  try {
+    await getPostgresPool().query(
+      `INSERT INTO user_channel_promo_state (telegram_id, subscribed, subscribed_checked_at)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (telegram_id)
+       DO UPDATE SET subscribed = EXCLUDED.subscribed, subscribed_checked_at = EXCLUDED.subscribed_checked_at`,
+      [telegramId, subscribed, checkedAtEpochSec]
+    );
+  } catch (e) {
+    console.warn('user_channel_promo_state subscribed:', (e as Error).message?.slice(0, 120));
   }
 }
 

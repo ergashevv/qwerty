@@ -288,7 +288,8 @@ async function bootstrap(): Promise<void> {
           `<code>/ad on</code> — yoqish\n` +
           `<code>/ad off</code> — o‘chirish\n` +
           `<code>/ad status</code> — holat\n` +
-          `<code>/ad sendall</code> — hammaga bir martalik yuborish`,
+          `<code>/ad sendall</code> — hammaga bir martalik yuborish\n\n` +
+          `Eslatma: auto-promo obuna bo‘lganlarga ko‘rinmaydi va bir userga tez-tez chiqmaydi.`,
         { parse_mode: 'HTML' }
       );
       return;

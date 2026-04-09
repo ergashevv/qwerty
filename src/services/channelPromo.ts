@@ -1,8 +1,22 @@
-import { getBotRuntimeFlag, setBotRuntimeFlag } from '../db/postgres';
+import {
+  getBotRuntimeFlag,
+  getUserChannelPromoState,
+  markUserChannelPromoShown,
+  setBotRuntimeFlag,
+  setUserChannelPromoSubscribed,
+} from '../db/postgres';
 
 const FLAG_KEY = 'channel_promo_enabled';
 const CHANNEL_USERNAME = 'kinovaai';
 const CACHE_TTL_MS = 30_000;
+const SHOW_EVERY_SECONDS = Math.max(
+  3600,
+  parseInt(process.env.CHANNEL_PROMO_COOLDOWN_SEC || String(3 * 24 * 3600), 10)
+);
+const SUB_CHECK_TTL_SECONDS = Math.max(
+  1800,
+  parseInt(process.env.CHANNEL_SUB_CHECK_TTL_SEC || String(24 * 3600), 10)
+);
 
 let cachedEnabled: boolean | null = null;
 let cachedAt = 0;
@@ -42,5 +56,56 @@ export function getChannelPromoKeyboard(): { inline_keyboard: Array<Array<{ text
   return {
     inline_keyboard: [[{ text: '📣 Kanalga obuna bo‘lish', url: `https://t.me/${CHANNEL_USERNAME}` }]],
   };
+}
+
+export interface PromoDecision {
+  show: boolean;
+  reason:
+    | 'disabled'
+    | 'no_user'
+    | 'cooldown'
+    | 'already_subscribed'
+    | 'eligible'
+    | 'status_unknown';
+}
+
+function nowSec(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+/** ON bo‘lsa ham userga haddan tashqari ko‘p ko‘rsatmaslik + obuna bo‘lsa umuman ko‘rsatmaslik */
+export async function shouldShowChannelPromo(
+  telegramId: number | undefined,
+  isSubscribedNow?: boolean | null
+): Promise<PromoDecision> {
+  if (!(await isChannelPromoEnabled())) return { show: false, reason: 'disabled' };
+  if (telegramId == null || !Number.isFinite(telegramId)) return { show: false, reason: 'no_user' };
+
+  const state = await getUserChannelPromoState(telegramId);
+  const now = nowSec();
+
+  let subscribedKnown: boolean | null = null;
+  if (typeof isSubscribedNow === 'boolean') {
+    subscribedKnown = isSubscribedNow;
+    await setUserChannelPromoSubscribed(telegramId, isSubscribedNow, now);
+  } else if (
+    state &&
+    state.subscribedCheckedAt != null &&
+    now - state.subscribedCheckedAt <= SUB_CHECK_TTL_SECONDS
+  ) {
+    subscribedKnown = state.subscribed;
+  }
+
+  if (subscribedKnown === true) return { show: false, reason: 'already_subscribed' };
+  if (state?.lastShownAt != null && now - state.lastShownAt < SHOW_EVERY_SECONDS) {
+    return { show: false, reason: 'cooldown' };
+  }
+  if (subscribedKnown === null) return { show: true, reason: 'status_unknown' };
+  return { show: true, reason: 'eligible' };
+}
+
+export async function markChannelPromoShown(telegramId: number | undefined): Promise<void> {
+  if (telegramId == null || !Number.isFinite(telegramId)) return;
+  await markUserChannelPromoShown(telegramId, nowSec());
 }
 
