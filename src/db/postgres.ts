@@ -468,6 +468,12 @@ export async function initPostgresSchema(): Promise<void> {
     EXCEPTION WHEN duplicate_column THEN NULL;
     END $$
   `);
+  await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE user_channel_promo_state ADD COLUMN promo_yes_count INTEGER NOT NULL DEFAULT 0;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `);
 }
 
 export async function withPgClient<T>(fn: (c: PoolClient) => Promise<T>): Promise<T | null> {
@@ -533,6 +539,8 @@ export interface UserChannelPromoState {
   subscribed: boolean;
   subscribedCheckedAt: number | null;
   broadcastSentAt: number | null;
+  /** Kanal promo yuborilguncha bergan "✅" soni */
+  promoYesCount: number;
 }
 
 export async function getUserChannelPromoState(
@@ -540,7 +548,9 @@ export async function getUserChannelPromoState(
 ): Promise<UserChannelPromoState | null> {
   try {
     const r = await getPostgresPool().query(
-      `SELECT telegram_id, last_shown_at, subscribed, subscribed_checked_at
+      `SELECT telegram_id, last_shown_at, subscribed, subscribed_checked_at,
+              COALESCE(promo_yes_count, 0) AS promo_yes_count,
+              broadcast_sent_at
        FROM user_channel_promo_state
        WHERE telegram_id = $1
        LIMIT 1`,
@@ -557,6 +567,7 @@ export async function getUserChannelPromoState(
         row.subscribed_checked_at == null ? null : Number(row.subscribed_checked_at),
       broadcastSentAt:
         row.broadcast_sent_at == null ? null : Number(row.broadcast_sent_at),
+      promoYesCount: Number(row.promo_yes_count ?? 0),
     };
   } catch (e) {
     console.warn('user_channel_promo_state get:', (e as Error).message?.slice(0, 120));
@@ -570,14 +581,32 @@ export async function markUserChannelPromoShown(
 ): Promise<void> {
   try {
     await getPostgresPool().query(
-      `INSERT INTO user_channel_promo_state (telegram_id, last_shown_at)
-       VALUES ($1, $2)
+      `INSERT INTO user_channel_promo_state (telegram_id, last_shown_at, promo_yes_count)
+       VALUES ($1, $2, 0)
        ON CONFLICT (telegram_id)
-       DO UPDATE SET last_shown_at = EXCLUDED.last_shown_at`,
+       DO UPDATE SET last_shown_at = EXCLUDED.last_shown_at, promo_yes_count = 0`,
       [telegramId, shownAtEpochSec]
     );
   } catch (e) {
     console.warn('user_channel_promo_state shown:', (e as Error).message?.slice(0, 120));
+  }
+}
+
+/** "✅ To'g'ri film" har bosilganda — kanal promo uchun hisoblagich */
+export async function incrementUserChannelPromoYesCount(telegramId: number): Promise<number> {
+  try {
+    const r = await getPostgresPool().query(
+      `INSERT INTO user_channel_promo_state (telegram_id, promo_yes_count)
+       VALUES ($1, 1)
+       ON CONFLICT (telegram_id)
+       DO UPDATE SET promo_yes_count = user_channel_promo_state.promo_yes_count + 1
+       RETURNING promo_yes_count`,
+      [telegramId]
+    );
+    return Number(r.rows[0]?.promo_yes_count ?? 0);
+  } catch (e) {
+    console.warn('user_channel_promo_state yes_count:', (e as Error).message?.slice(0, 120));
+    return 0;
   }
 }
 

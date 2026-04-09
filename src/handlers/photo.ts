@@ -40,12 +40,6 @@ import { getProblemReportPending } from '../db/feedbackProblemReport';
 import { tryCompleteProblemReport } from './problemReportSubmit';
 import { feedbackModeReplyMarkup } from './feedbackModeBack';
 import { PROBLEM_REPORT_PHOTO_NEED_CAPTION_HTML } from '../messages/feedback';
-import {
-  getChannelPromoKeyboard,
-  getChannelPromoMessageHtml,
-  markChannelPromoShown,
-  shouldShowChannelPromo,
-} from '../services/channelPromo';
 
 export async function handlePhoto(ctx: Context): Promise<void> {
   const userId  = ctx.from?.id;
@@ -456,32 +450,6 @@ export async function sendMovieResult(
       parse_mode: 'HTML',
       reply_markup: replyMarkup,
     });
-  }
-
-  const subscriptionStatus = await (async (): Promise<boolean | null> => {
-    const uid = ctx.from?.id;
-    if (!uid || !ctx.chat?.id) return null;
-    try {
-      // Faqat public kanal username bilan ishlaydi.
-      const member = await ctx.api.getChatMember('@kinovaai', uid);
-      return (
-        member.status === 'member' ||
-        member.status === 'administrator' ||
-        member.status === 'creator'
-      );
-    } catch {
-      return null;
-    }
-  })();
-
-  const promoDecision = await shouldShowChannelPromo(ctx.from?.id, subscriptionStatus);
-  if (promoDecision.show) {
-    await ctx.reply(getChannelPromoMessageHtml(), {
-      parse_mode: 'HTML',
-      reply_markup: getChannelPromoKeyboard(),
-      link_preview_options: { is_disabled: true },
-    });
-    await markChannelPromoShown(ctx.from?.id);
   }
 
   await maybeDonateAfterSuccess(ctx).catch(() => {});

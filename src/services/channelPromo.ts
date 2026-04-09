@@ -1,6 +1,8 @@
+import type { Context } from 'grammy';
 import {
   getBotRuntimeFlag,
   getUserChannelPromoState,
+  incrementUserChannelPromoYesCount,
   markUserChannelPromoShown,
   setBotRuntimeFlag,
   setUserChannelPromoSubscribed,
@@ -9,14 +11,13 @@ import {
 const FLAG_KEY = 'channel_promo_enabled';
 const CHANNEL_USERNAME = 'kinovaai';
 const CACHE_TTL_MS = 30_000;
-const SHOW_EVERY_SECONDS = Math.max(
-  3600,
-  parseInt(process.env.CHANNEL_PROMO_COOLDOWN_SEC || String(3 * 24 * 3600), 10)
-);
-const SUB_CHECK_TTL_SECONDS = Math.max(
-  1800,
-  parseInt(process.env.CHANNEL_SUB_CHECK_TTL_SEC || String(24 * 3600), 10)
-);
+
+/** Ketma-ket (jami) "✅ To'g'ri film" — shu miqdordan keyin promo tekshiriladi */
+const REQUIRED_YES_COUNT = 3;
+/** Oldingi kanal xabaridan keyin kamida shuncha vaqt (sekund) */
+const MIN_SECONDS_BETWEEN_PROMOS = 3 * 24 * 60 * 60;
+/** API xato bo‘lsa, bazadagi "obuna" ma’lumoti shuncha vaqt ichida ishonchli */
+const SUBSCRIBED_DB_CACHE_SEC = 24 * 60 * 60;
 
 let cachedEnabled: boolean | null = null;
 let cachedAt = 0;
@@ -58,54 +59,70 @@ export function getChannelPromoKeyboard(): { inline_keyboard: Array<Array<{ text
   };
 }
 
-export interface PromoDecision {
-  show: boolean;
-  reason:
-    | 'disabled'
-    | 'no_user'
-    | 'cooldown'
-    | 'already_subscribed'
-    | 'eligible'
-    | 'status_unknown';
-}
-
 function nowSec(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-/** ON bo‘lsa ham userga haddan tashqari ko‘p ko‘rsatmaslik + obuna bo‘lsa umuman ko‘rsatmaslik */
-export async function shouldShowChannelPromo(
-  telegramId: number | undefined,
-  isSubscribedNow?: boolean | null
-): Promise<PromoDecision> {
-  if (!(await isChannelPromoEnabled())) return { show: false, reason: 'disabled' };
-  if (telegramId == null || !Number.isFinite(telegramId)) return { show: false, reason: 'no_user' };
+/** UTC sana kaliti — bir kunda maksimal 1 promo */
+function utcDayKey(epochSec: number): string {
+  return new Date(epochSec * 1000).toISOString().slice(0, 10);
+}
 
-  const state = await getUserChannelPromoState(telegramId);
+/**
+ * Faqat "✅ To'g'ri film" bosilganda chaqiriladi.
+ * Qoidalar (hardcode): obunachi — hech qachon; 3 marta ✅ dan keyin; oldingi promodan ≥3 kun; bir UTC kunida ≤1 marta.
+ */
+export async function offerChannelPromoAfterPositiveFeedback(ctx: Context): Promise<void> {
+  if (ctx.chat?.type !== 'private') return;
+  const uid = ctx.from?.id;
+  if (uid == null) return;
+  if (!(await isChannelPromoEnabled())) return;
+
   const now = nowSec();
 
-  let subscribedKnown: boolean | null = null;
-  if (typeof isSubscribedNow === 'boolean') {
-    subscribedKnown = isSubscribedNow;
-    await setUserChannelPromoSubscribed(telegramId, isSubscribedNow, now);
-  } else if (
-    state &&
-    state.subscribedCheckedAt != null &&
-    now - state.subscribedCheckedAt <= SUB_CHECK_TTL_SECONDS
-  ) {
-    subscribedKnown = state.subscribed;
+  let liveSubscribed: boolean | null = null;
+  try {
+    const member = await ctx.api.getChatMember(`@${CHANNEL_USERNAME}`, uid);
+    liveSubscribed =
+      member.status === 'member' ||
+      member.status === 'administrator' ||
+      member.status === 'creator';
+  } catch {
+    liveSubscribed = null;
   }
 
-  if (subscribedKnown === true) return { show: false, reason: 'already_subscribed' };
-  if (state?.lastShownAt != null && now - state.lastShownAt < SHOW_EVERY_SECONDS) {
-    return { show: false, reason: 'cooldown' };
+  if (liveSubscribed === true) {
+    await setUserChannelPromoSubscribed(uid, true, now);
+    return;
   }
-  if (subscribedKnown === null) return { show: true, reason: 'status_unknown' };
-  return { show: true, reason: 'eligible' };
-}
 
-export async function markChannelPromoShown(telegramId: number | undefined): Promise<void> {
-  if (telegramId == null || !Number.isFinite(telegramId)) return;
-  await markUserChannelPromoShown(telegramId, nowSec());
-}
+  if (liveSubscribed === false) {
+    await setUserChannelPromoSubscribed(uid, false, now);
+  } else {
+    const st = await getUserChannelPromoState(uid);
+    if (
+      st?.subscribed === true &&
+      st.subscribedCheckedAt != null &&
+      now - st.subscribedCheckedAt <= SUBSCRIBED_DB_CACHE_SEC
+    ) {
+      return;
+    }
+  }
 
+  const yesCount = await incrementUserChannelPromoYesCount(uid);
+  if (yesCount < REQUIRED_YES_COUNT) return;
+
+  const state = await getUserChannelPromoState(uid);
+  const last = state?.lastShownAt ?? null;
+  if (last != null) {
+    if (now - last < MIN_SECONDS_BETWEEN_PROMOS) return;
+    if (utcDayKey(last) === utcDayKey(now)) return;
+  }
+
+  await ctx.reply(getChannelPromoMessageHtml(), {
+    parse_mode: 'HTML',
+    reply_markup: getChannelPromoKeyboard(),
+    link_preview_options: { is_disabled: true },
+  });
+  await markUserChannelPromoShown(uid, now);
+}

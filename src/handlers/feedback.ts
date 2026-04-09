@@ -8,6 +8,7 @@ import {
   resetFeedbackNoStreak,
   setProblemReportPending,
 } from '../db/feedbackProblemReport';
+import { offerChannelPromoAfterPositiveFeedback } from '../services/channelPromo';
 import { tryBuildFeedbackThumbB64 } from '../services/feedbackThumb';
 import { maybeDonateAfterFeedbackYes } from './donatePrompt';
 import { feedbackModeReplyMarkup } from './feedbackModeBack';
@@ -125,6 +126,7 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
       }).catch(() => {});
     }
     await maybeDonateAfterFeedbackYes(ctx).catch(() => {});
+    await offerChannelPromoAfterPositiveFeedback(ctx).catch(() => {});
   } else {
     await setProblemReportPending(uid, {
       predictedTitle: row.predicted_title,
