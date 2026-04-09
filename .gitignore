@@ -8,3 +8,7 @@ dist/
 test_final.ts
 logs/
 *.log
+
+# SearXNG lokal konfig (VPS da deploy/searxng dan yaratiladi)
+deploy/searxng/config/
+deploy/searxng/data/

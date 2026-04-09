@@ -1,7 +1,5 @@
-import { GoogleGenerativeAI, DynamicRetrievalMode } from '@google/generative-ai';
 import axios from 'axios';
-import { withGemini } from './geminiClient';
-import { tapGeminiGenerateContent } from './geminiUsage';
+import { isAzureLlmConfigured, azureChatText, azureChatVision } from './azureLlm';
 import sharpLib from 'sharp';
 import { recognizeCelebrities, extractImdbId } from './rekognition';
 import type { MovieCacheEntry } from '../db';
@@ -51,15 +49,11 @@ export interface WatchLink {
 
 const TMDB_KEY   = process.env.TMDB_API_KEY   || '';
 const OMDB_KEY   = process.env.OMDB_API_KEY   || '';
-const VISION_KEY = process.env.VISION_API_KEY  || '';
 const IMGBB_KEY  = process.env.IMGBB_API_KEY   || '';
-const GEMINI_KEY = process.env.GEMINI_API_KEY  || '';
+/** Barcha LLM: faqat Azure OpenAI (GEMINI / Google generative olib tashlangan). */
+const AI_LLM_ENABLED = isAzureLlmConfigured();
 const KP_KEY     = process.env.KINOPOISK_API_KEY || '';
 const KP_BASE    = 'https://kinopoiskapiunofficial.tech';
-/** Matnli syujet qidiruvida Google Search grounding (pulli). */
-const GEMINI_GROUNDING_TEXT = process.env.GEMINI_GROUNDING_TEXT_SEARCH === 'true';
-/** Faqat Gemini (multimodal + matn + tarjima). */
-const GEMINI_MODEL = 'gemini-2.5-flash';
 /** Tasdiq bosqichi: har bir nomzod uchun alohida multimodal chaqiruv — token sarfi shu yerda ko‘payadi */
 const MAX_VERIFY = Math.min(8, Math.max(1, parseInt(process.env.GEMINI_MAX_VERIFY || '4', 10)));
 /** Uzoq kenglikdagi screenshotlar uchun Gemini/Vision tokenini kesish (sahna tanib olish uchun 1280 yetarli) */
@@ -381,14 +375,18 @@ async function omdbById(imdbId: string): Promise<{ title: string; type: MediaTyp
   return null;
 }
 
-// ─── SEARXNG / BRAVE / GOOGLE CSE (matn qidiruv) ────────────────────────────
+// ─── BING / SEARXNG / BRAVE (matn qidiruv — Google CSE olib tashlangan) ─────
 
 interface SerperResult { title: string; link: string; snippet?: string; }
 
 const BRAVE_KEY = process.env.BRAVE_SEARCH_API_KEY || '';
-const CSE_KEY   = process.env.GOOGLE_CSE_KEY || '';
-const CSE_ID    = process.env.GOOGLE_CSE_ID  || '';
-let _cseDisabled = false; // bir marta xato bo'lsa, qayta urinmaymiz
+/** Microsoft Bing: Web Search v7 yoki Custom Search — bir xil subscription kaliti */
+const BING_KEY = process.env.BING_SEARCH_API_KEY || '';
+/**
+ * Bing Custom Search — `customconfig` parametri (customsearch.ai → instance → Production → Custom Configuration ID).
+ * Bo‘sh bo‘lsa faqat umumiy Web Search ishlatiladi.
+ */
+const BING_CUSTOM_CONFIG = process.env.BING_CUSTOMSEARCH_CONFIG_ID?.trim() || '';
 
 function searxngBaseUrl(): string | null {
   const raw = process.env.SEARXNG_URL?.trim();
@@ -430,7 +428,57 @@ async function searxngSearch(query: string): Promise<SerperResult[]> {
   }
 }
 
-/** Brave Search API — CSE dan keyin fallback; `BRAVE_SEARCH_API_KEY` bo'lsa ishlaydi */
+function mapBingWebPages(values: unknown): SerperResult[] {
+  if (!Array.isArray(values)) return [];
+  return values
+    .map((item: { name?: string; url?: string; snippet?: string }) => ({
+      title: String(item.name ?? '').trim(),
+      link: String(item.url ?? '').trim(),
+      snippet: String(item.snippet ?? '').trim(),
+    }))
+    .filter((x) => x.link.length > 0 && /^https?:\/\//i.test(x.link));
+}
+
+/** Bing Custom Search API v7 — Azure’dagi Custom / Grounding Custom kaliti bilan */
+async function bingCustomWebSearch(query: string): Promise<SerperResult[]> {
+  if (!BING_KEY || !BING_CUSTOM_CONFIG) return [];
+  try {
+    const r = await axios.get('https://api.bing.microsoft.com/v7.0/custom/search', {
+      params: {
+        q: query,
+        customconfig: BING_CUSTOM_CONFIG,
+        count: 10,
+        safeSearch: 'Moderate',
+      },
+      headers: { 'Ocp-Apim-Subscription-Key': BING_KEY },
+      timeout: TIMEOUT,
+      validateStatus: (s) => s === 200,
+    });
+    return mapBingWebPages(r.data?.webPages?.value);
+  } catch (e) {
+    console.warn('Bing Custom Search xato:', (e as Error).message?.slice(0, 80));
+    return [];
+  }
+}
+
+/** Bing Web Search API v7 — umumiy veb qidiruv */
+async function bingWebSearch(query: string): Promise<SerperResult[]> {
+  if (!BING_KEY) return [];
+  try {
+    const r = await axios.get('https://api.bing.microsoft.com/v7.0/search', {
+      params: { q: query, count: 10, safeSearch: 'Moderate' },
+      headers: { 'Ocp-Apim-Subscription-Key': BING_KEY },
+      timeout: TIMEOUT,
+      validateStatus: (s) => s === 200,
+    });
+    return mapBingWebPages(r.data?.webPages?.value);
+  } catch (e) {
+    console.warn('Bing Search xato:', (e as Error).message?.slice(0, 80));
+    return [];
+  }
+}
+
+/** Brave Search API — Bing / SearXNG dan keyin fallback */
 async function braveSearch(query: string): Promise<SerperResult[]> {
   if (!BRAVE_KEY) return [];
   try {
@@ -450,49 +498,30 @@ async function braveSearch(query: string): Promise<SerperResult[]> {
   }
 }
 
-/** Google Custom Search — 100 bepul/kun (console.cloud.google.com) */
-async function googleCseSearch(query: string): Promise<SerperResult[]> {
-  if (!CSE_KEY || !CSE_ID || _cseDisabled) return [];
-  try {
-    const r = await axios.get('https://www.googleapis.com/customsearch/v1', {
-      params: { key: CSE_KEY, cx: CSE_ID, q: query, num: 10 },
-      timeout: TIMEOUT,
-    });
-    return (r.data.items || []).map((item: { title: string; link: string; snippet?: string }) => ({
-      title: item.title || '',
-      link: item.link || '',
-      snippet: item.snippet || '',
-    }));
-  } catch (e) {
-    const status = (e as { response?: { status?: number } }).response?.status;
-    if (status === 403) {
-      _cseDisabled = true;
-      console.warn('⚠️ Google CSE 403 — o\'chirildi (session davomida qayta urinilmaydi)');
-    } else {
-      console.warn('Google CSE xato:', (e as Error).message?.slice(0, 80));
-    }
-    return [];
-  }
-}
-
 /**
- * Veb qidiruv: Google Custom Search → SearXNG (ixtiyoriy) → Brave.
- * Serper ishlatilmaydi — faqat Google (CSE) yoki Brave (kalit bo'lsa).
+ * Veb qidiruv: SearXNG (o‘z VPS — tekin) → Bing Custom → Bing Web → Brave.
  */
 async function serperSearch(query: string, _gl = 'uz', _hl = 'uz'): Promise<SerperResult[]> {
   const q = query.slice(0, 40);
-  const cse = await googleCseSearch(query);
-  if (cse.length > 0) {
-    console.log(`🔍 Google CSE: "${q}" (${cse.length} natija)`);
-    return cse;
-  }
   const sx = await searxngSearch(query);
   if (sx.length > 0) {
     console.log(`🌐 SearXNG: "${q}" (${sx.length} natija)`);
     return sx;
   }
+  if (BING_CUSTOM_CONFIG) {
+    const custom = await bingCustomWebSearch(query);
+    if (custom.length > 0) {
+      console.log(`🔎 Bing Custom: "${q}" (${custom.length} natija)`);
+      return custom;
+    }
+  }
+  const bing = await bingWebSearch(query);
+  if (bing.length > 0) {
+    console.log(`🔎 Bing: "${q}" (${bing.length} natija)`);
+    return bing;
+  }
   if (searxngBaseUrl()) {
-    console.log(`🌐 SearXNG bo'sh — Brave fallback: "${q}"`);
+    console.log(`🌐 SearXNG bo'sh — Bing/Brave: "${q}"`);
   }
   if (BRAVE_KEY) {
     console.log(`🦁 Brave: "${q}"`);
@@ -601,94 +630,6 @@ async function uploadToImgbb(base64: string): Promise<string | null> {
   } catch { return null; }
 }
 
-// ─── GOOGLE VISION ───────────────────────────────────────────────────────────
-
-interface VisionWebDetection {
-  bestGuessLabels?: Array<{ label?: string }>;
-  pagesWithMatchingImages?: Array<{ pageTitle?: string; url?: string }>;
-  webEntities?: Array<{ description?: string; score?: number }>;
-}
-
-const VISION_SKIP = new Set([
-  'screenshot','film','cinema','movie','video','image','television','person',
-  'man','woman','actor','actress','entertainment','scene','media','watermark',
-  'poster','photo','picture','human','people','face','faces','portrait','crowd',
-  'instagram','tiktok','telegram','reels','social media',
-  // Uzbek streaming platform watermarks — rasmni adashtirib yuboradi
-  'tasavvur','cinemascenefuz','kinogo','uzmovi','multfilm','uzkinofilm',
-  'kinolar.uz','ok.ru','rutube','ivi','kinopoisk','uzfilms',
-  // "Behind the scenes" / documentary noise — film sahnalari emas
-  'behind the scenes','making of','nos bastidores','bastidores de hollywood',
-  'on the set','film set','movie set','hollywood history',
-]);
-
-async function identifyByVision(base64: string): Promise<MovieIdentified | null> {
-  if (!VISION_KEY) return null;
-  try {
-    const r = await axios.post(
-      `https://vision.googleapis.com/v1/images:annotate?key=${VISION_KEY}`,
-      { requests: [{ image: { content: base64 }, features: [{ type: 'WEB_DETECTION', maxResults: 20 }] }] },
-      { timeout: TIMEOUT }
-    );
-    const wd: VisionWebDetection = r.data?.responses?.[0]?.webDetection || {};
-
-    const pages = (wd.pagesWithMatchingImages || []).filter(
-      p => !/youtube|youtu\.be|tiktok|instagram|facebook|twitter|spotify|vevo/i.test(p.url || '')
-    );
-
-    // IMDb URL dan to'g'ridan topish
-    for (const p of pages) {
-      const m = (p.url || '').match(/imdb\.com\/title\/(tt\d+)/);
-      if (m && OMDB_KEY) {
-        const found = await omdbById(m[1]);
-        if (found) return { title: found.title, type: found.type };
-      }
-    }
-
-    // IMDb sahifa nomi
-    const imdbPage = pages.find(p => /imdb/i.test(p.url || '') && p.pageTitle);
-    if (imdbPage) {
-      const title = imdbPage.pageTitle!
-        .replace(/\s*[-–|]\s*IMDb.*/i, '')
-        .replace(/\s*\(\d{4}\).*/,'').trim();
-      if (title.length > 2) {
-        const found = await omdbSearch(title);
-        if (found) return { title: found.title, type: found.type };
-      }
-    }
-
-    // bestGuess — VISION_SKIP ga kirgan so'zlar bo'lsa o'tkazib yuboramiz
-    const bg = wd.bestGuessLabels?.[0]?.label || '';
-    const bgWords = bg.toLowerCase().split(/\s+/);
-    const bgHasNoise = bgWords.some(w => VISION_SKIP.has(w));
-    if (bg && !bgHasNoise && !VISION_SKIP.has(bg.toLowerCase()) && bg.length > 2) {
-      const found = await omdbSearch(bg);
-      if (found) return { title: found.title, type: found.type };
-    }
-
-    // web entities — faqat aniq film nomlari; shovqinli yoki watermark so'zlar o'tkaziladi
-    const isNoisy = (desc: string) => {
-      const lower = desc.toLowerCase();
-      // To'liq so'z to'plami tekshiruvi
-      if (VISION_SKIP.has(lower)) return true;
-      // "behind the scenes", "bastidores", watermark nomlari — qisman moslik
-      if (/bastidores|behind.the.scenes|making.of|on.the.set|tasavvur|cinemascenefuz/i.test(lower)) return true;
-      return false;
-    };
-    const entities = (wd.webEntities || [])
-      .filter(e => (e.score || 0) > 0.6 && e.description && !isNoisy(e.description))
-      .map(e => e.description!)
-      .slice(0, 5);
-    for (const entity of entities) {
-      const found = await omdbSearch(entity);
-      if (found) return { title: found.title, type: found.type };
-    }
-  } catch (e) {
-    console.warn('Vision xato:', (e as Error).message?.slice(0, 60));
-  }
-  return null;
-}
-
 // ─── AWS REKOGNITION → TMDb KESISHUVI ────────────────────────────────────────
 
 async function identifyByFaces(base64: string): Promise<MovieIdentified | null> {
@@ -728,7 +669,7 @@ async function identifyByFaces(base64: string): Promise<MovieIdentified | null> 
         const c = sortedKp[0];
         return { title: c.title || c.name || '', type: (c.media_type === 'tv' ? 'tv' : 'movie') as MediaType, confidence: 'medium' };
       }
-      if (GEMINI_KEY) {
+      if (AI_LLM_ENABLED) {
         const pickG = await geminiPickFromCandidates(base64, names, titles);
         if (pickG) return pickG;
       }
@@ -758,7 +699,7 @@ async function identifyByFaces(base64: string): Promise<MovieIdentified | null> 
   }
 
   // Ko'p nomzod: Gemini tanlaydi; topilmasa — TMDB reytingi bo'yicha fallback
-  if (candidates.length > 1 && GEMINI_KEY) {
+  if (candidates.length > 1 && AI_LLM_ENABLED) {
     const names = celebrities.map(c => c.name).join(', ');
     const titles = candidates.map(c => c.title || c.name).join(' | ');
     const pickG = await geminiPickFromCandidates(base64, names, titles);
@@ -777,17 +718,8 @@ async function identifyByFaces(base64: string): Promise<MovieIdentified | null> 
 }
 
 async function geminiPickFromCandidates(base64: string, actors: string, candidates: string): Promise<MovieIdentified | null> {
-  if (!GEMINI_KEY) return null;
-  try {
-    const genAI = new GoogleGenerativeAI(GEMINI_KEY);
-    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-    const result = await tapGeminiGenerateContent(
-      'geminiPickFromCandidates',
-      withGemini(() =>
-      model.generateContent([
-        { inlineData: { data: base64, mimeType: 'image/jpeg' } },
-        {
-          text: `Recognized actors: ${actors}
+  if (!AI_LLM_ENABLED) return null;
+  const userPrompt = `Recognized actors: ${actors}
 Candidate movies/shows (pick exactly ONE from this list): ${candidates}
 
 Look at the screenshot carefully. Based on the scene details (costumes, setting, lighting, props, visible text in the film frame), which ONE of the candidates does this screenshot belong to?
@@ -800,11 +732,9 @@ IMPORTANT RULES:
 5. Only use confidence "low" with empty title if the image has NO connection to any candidate (e.g. it is clearly a non-film image like a real-life photo or meme).
 
 Respond ONLY with JSON:
-{"title": "Exact title from candidates", "type": "movie" or "tv", "confidence": "high/medium/low"}`,
-        },
-      ])
-    ));
-    const text = result.response.text();
+{"title": "Exact title from candidates", "type": "movie" or "tv", "confidence": "high/medium/low"}`;
+  try {
+    const text = await azureChatVision('geminiPickFromCandidates', base64, 'image/jpeg', userPrompt);
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return null;
     const parsed = JSON.parse(m[0]) as { title?: string; type?: string; confidence?: string };
@@ -823,21 +753,12 @@ Respond ONLY with JSON:
 // ─── GEMINI CROSS-CHECK ───────────────────────────────────────────────────────
 
 async function identifyByGemini(base64: string, textHint?: string | null): Promise<MovieIdentified | null> {
-  if (!GEMINI_KEY) return null;
+  if (!AI_LLM_ENABLED) return null;
   try {
-    const genAI = new GoogleGenerativeAI(GEMINI_KEY);
-    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
     const hintLine = textHint
       ? `\nUser hint (may be a movie name, actor, or description in Uzbek/Russian/English): "${textHint.slice(0, 200)}" — use this as an additional clue, but only if it actually matches the screenshot.`
       : '';
-    const result = await tapGeminiGenerateContent(
-      'identifyByGemini',
-      withGemini(() =>
-      model.generateContent([
-        {
-          inlineData: { data: base64, mimeType: 'image/jpeg' },
-        },
-        `You are a world cinema expert. Identify the EXACT movie or TV show in this screenshot.
+    const userPrompt = `You are a world cinema expert. Identify the EXACT movie or TV show in this screenshot.
 
 The film can be from ANY country: Hollywood, Turkey, Korea, Russia, Kazakhstan, Uzbekistan, Kyrgyzstan, Azerbaijan, India, Iran, or anywhere else. Do NOT bias toward any region.${hintLine}
 
@@ -855,10 +776,8 @@ Respond ONLY with JSON:
 Rules:
 - Use confidence "high" or "medium" only if you genuinely recognize this specific film.
 - Use "unknown" + "low" if you cannot identify the specific title (not just the genre/region).
-- Do NOT guess a title just because it fits the genre — only respond with a title you actually recognize.`,
-      ])
-    ));
-    const text = result.response.text();
+- Do NOT guess a title just because it fits the genre — only respond with a title you actually recognize.`;
+    const text = await azureChatVision('identifyByGemini', base64, 'image/jpeg', userPrompt);
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return null;
     const parsed = JSON.parse(m[0]) as { title?: string; type?: string; confidence?: string };
@@ -870,7 +789,7 @@ Rules:
     if (verified) return { title: verified.title, type: verified.type, confidence: parsed.confidence };
     return { title: parsed.title, type: parsed.type === 'tv' ? 'tv' : 'movie', confidence: parsed.confidence };
   } catch (e) {
-    console.warn('Gemini xato:', (e as Error).message?.slice(0, 200));
+    console.warn('LLM (rasm) xato:', (e as Error).message?.slice(0, 200));
     return null;
   }
 }
@@ -960,17 +879,8 @@ interface VerifyResult {
 }
 
 async function geminiVerify(base64: string, candidateTitle: string, mimeType: string): Promise<VerifyResult> {
-  if (!GEMINI_KEY) return { match: false };
-  try {
-    const genAI = new GoogleGenerativeAI(GEMINI_KEY);
-    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-    const result = await tapGeminiGenerateContent(
-      'geminiVerify',
-      withGemini(() =>
-      model.generateContent([
-        { inlineData: { data: base64, mimeType: mimeType } },
-        {
-          text: `Does this screenshot clearly belong to the movie/TV show "${candidateTitle}"?
+  if (!AI_LLM_ENABLED) return { match: false };
+  const userPrompt = `Does this screenshot clearly belong to the movie/TV show "${candidateTitle}"?
 
 CRITICAL RULES:
 1. IGNORE watermarks and overlaid text (TASAVVUR, CINEMASCENEUZ, channel logos, player UI, timestamps)
@@ -984,11 +894,9 @@ CRITICAL RULES:
 Answer ONLY with JSON:
 {"match": true} 
 or
-{"match": false, "reason": "brief explanation", "alternativeTitle": "Exact title or empty string", "alternativeType": "movie or tv or empty string"}`,
-        },
-      ])
-    ));
-    const text = result.response.text();
+{"match": false, "reason": "brief explanation", "alternativeTitle": "Exact title or empty string", "alternativeType": "movie or tv or empty string"}`;
+  try {
+    const text = await azureChatVision('geminiVerify', base64, mimeType, userPrompt);
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return { match: false };
     const parsed = JSON.parse(m[0]) as {
@@ -1000,7 +908,7 @@ or
     const ok = parsed.match === true;
     const alt = (parsed.alternativeTitle || '').trim();
     const altType: MediaType = parsed.alternativeType === 'tv' ? 'tv' : 'movie';
-    console.log(`🔍 Gemini verify "${candidateTitle}": ${ok} — ${parsed.reason || ''}${alt ? ` | alt: "${alt}"` : ''}`);
+    console.log(`🔍 Tasdiq LLM "${candidateTitle}": ${ok} — ${parsed.reason || ''}${alt ? ` | alt: "${alt}"` : ''}`);
     return {
       match: ok,
       alternativeTitle: alt || undefined,
@@ -1020,15 +928,14 @@ function pushDistinct(candidates: MovieIdentified[], m: MovieIdentified | null |
 }
 
 /**
- * Rasm bo'yicha film: faqat Gemini (multimodal) + Vision / Rekognition / tasdiq.
- * GEMINI_API_KEY majburiy.
+ * Rasm bo'yicha film: Azure OpenAI multimodal LLM + AWS Rekognition / tasdiq.
  */
 export async function identifyMovie(base64: string, mimeType: string, textHint?: string | null): Promise<IdentifyMovieResult> {
   const withTimeout = <T>(p: Promise<T>, ms = 10000): Promise<T | null> =>
     Promise.race([p, new Promise<null>(res => setTimeout(() => res(null), ms))]).catch(() => null);
 
-  if (!GEMINI_KEY) {
-    console.warn('identifyMovie: GEMINI_API_KEY yo\'q — rasm bo\'yicha aniqlash o\'chirilgan');
+  if (!AI_LLM_ENABLED) {
+    console.warn('identifyMovie: Azure OpenAI sozlanmagan — rasm bo\'yicha aniqlash o\'chirilgan');
     return { ok: false, reason: 'no_candidates' };
   }
 
@@ -1036,22 +943,15 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
   const aiBase64 = await downscaleForAiPipeline(croppedBase64);
   const cropMime = 'image/jpeg';
 
-  const [faces, vision, gemini] = await Promise.all([
+  const [faces, gemini] = await Promise.all([
     withTimeout(identifyByFaces(aiBase64), 25000),
-    withTimeout(identifyByVision(aiBase64)),
     withTimeout(identifyByGemini(aiBase64, textHint)),
   ]);
 
-  console.log(`Pass1 — Faces: ${faces?.title || '-'}, Vision: ${vision?.title || '-'}, Gemini: ${gemini?.title || '-'}`);
+  console.log(`Pass1 — Faces: ${faces?.title || '-'}, LLM: ${gemini?.title || '-'}`);
 
-  /**
-   * Tasdiq tartibi: avvalo ikki manba (yuz + vision yoki boshqa juftlik) kelishgan nomzod,
-   * keyin yuqori ishonchli yuz, vision, eng oxirida yolg‘iz Gemini taklifi.
-   * Oldin Gemini birinchi qo‘yilgandi — shunda noto‘g‘ri Gemini javobi birinchi tekshirilib,
-   * “tasdiqlangan” bo‘lib qolardi, aslida to‘g‘ri konsensus (masalan Faces+Vision) esa keyin.
-   */
   const ordered: MovieIdentified[] = [];
-  const pass1 = [faces, vision, gemini].filter(Boolean) as MovieIdentified[];
+  const pass1 = [faces, gemini].filter(Boolean) as MovieIdentified[];
 
   for (let i = 0; i < pass1.length; i++) {
     for (let j = i + 1; j < pass1.length; j++) {
@@ -1066,10 +966,6 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
     pushDistinct(ordered, faces);
   }
 
-  if (vision) {
-    pushDistinct(ordered, vision);
-  }
-
   if (gemini && gemini.confidence !== 'low') {
     pushDistinct(ordered, gemini);
   }
@@ -1080,7 +976,6 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
 
   if (ordered.length === 0) {
     pushDistinct(ordered, faces);
-    pushDistinct(ordered, vision);
     if (gemini && gemini.confidence !== 'low') {
       pushDistinct(ordered, gemini);
     }
@@ -1088,38 +983,7 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
 
   console.log(`Nomzodlar tartibi (tasdiq): ${ordered.map((c) => c.title).join(' → ') || '—'}`);
 
-  /**
-   * Rekognition (yuz) va Vision ikkalasi ham bir xil filmni ko‘rsatsa — bu mustaqil konsensus.
-   * Keyingi bosqichdagi geminiVerify aynan shu kadrlarda tez-tez false negative beradi (xuddi rasm, turli marta rad).
-   * Shuning uchun konsensusda Gemini verify o‘tkazilmaydi.
-   */
-  if (faces?.title && vision?.title && titlesMatch(faces.title, vision.title)) {
-    const consensus: MovieIdentified = {
-      title: faces.title,
-      type: faces.type ?? vision.type,
-      confidence: faces.confidence ?? vision.confidence,
-    };
-    console.log('✅ faces+vision konsensus — Gemini verify o‘tkazilmaydi:', consensus.title);
-    return { ok: true, identified: consensus };
-  }
-
-  /** Vision + Gemini bir xil — ikki mustaqil vizual yo‘l; tasdiq bosqichini tejash */
-  if (
-    vision?.title &&
-    gemini?.title &&
-    gemini.confidence !== 'low' &&
-    titlesMatch(vision.title, gemini.title)
-  ) {
-    const consensus: MovieIdentified = {
-      title: vision.title,
-      type: vision.type ?? gemini.type,
-      confidence: gemini.confidence ?? vision.confidence,
-    };
-    console.log('✅ vision+gemini konsensus — Gemini verify o‘tkazilmaydi:', consensus.title);
-    return { ok: true, identified: consensus };
-  }
-
-  /** Yuz + Gemini bir xil — aktyor va sahna mos */
+  /** Yuz + LLM bir xil — aktyor va sahna mos */
   if (
     faces?.title &&
     gemini?.title &&
@@ -1149,7 +1013,7 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
     // Verify false bo'lsa lekin Gemini aniq alternativ sarlavha bilsa — saqlab qo'yamiz
     if (verifyRes?.alternativeTitle && !lastAlternative) {
       lastAlternative = { title: verifyRes.alternativeTitle, type: verifyRes.alternativeType ?? cand.type };
-      console.log('💡 Gemini alternativ taklif:', lastAlternative.title);
+      console.log('💡 LLM alternativ taklif:', lastAlternative.title);
     }
   }
 
@@ -1169,7 +1033,7 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
     console.log('⚠️ Tasdiq uchun nomzod yo‘q');
     return { ok: false, reason: 'no_candidates' };
   }
-  console.log('⚠️ Hech bir nomzod Gemini tasdiqidan o\'tmadi');
+  console.log('⚠️ Hech bir nomzod LLM tasdiqidan o\'tmadi');
   return { ok: false, reason: 'gemini_verify_failed' };
 }
 
@@ -1234,25 +1098,17 @@ function looksLikeWallEPlotDescription(q: string): boolean {
 
 /** Faqat so‘rov bilan sarlavha mos kelsa (uzun syujet matnida birinchi IMDb — doimiy xato, masalan Westler). */
 async function verifyPlotMatch(userQuery: string, movieTitle: string, tmdbOverview: string): Promise<boolean> {
-  if (!GEMINI_KEY || !tmdbOverview || tmdbOverview.length < 20) return true;
-  try {
-    const genAI = new GoogleGenerativeAI(GEMINI_KEY);
-    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-    const result = await tapGeminiGenerateContent(
-      'verifyPlotMatch',
-      withGemini(() =>
-      model.generateContent(
-        `User described a movie/show like this (may be in Uzbek, Russian, or another language):
+  if (!AI_LLM_ENABLED || !tmdbOverview || tmdbOverview.length < 20) return true;
+  const plotPrompt = `User described a movie/show like this (may be in Uzbek, Russian, or another language):
 "${userQuery.slice(0, 500)}"
 
 The system identified it as: "${movieTitle}"
 Official plot: "${tmdbOverview}"
 
 Does the user's description plausibly match this movie's plot? The user may describe only one scene, character, or aspect — not the full plot.
-Answer ONLY "yes" or "no".`
-      )
-    ));
-    const text = result.response.text()?.trim().toLowerCase();
+Answer ONLY "yes" or "no".`;
+  try {
+    const text = (await azureChatText('verifyPlotMatch', plotPrompt))?.trim().toLowerCase();
     if (text?.startsWith('no')) {
       console.log(`⚠️ Plot verification failed: user query vs "${movieTitle}"`);
       return false;
@@ -1349,20 +1205,19 @@ export async function identifyFromTextDetailed(query: string): Promise<IdentifyF
   }
 
   // 3. Veb qidiruv konteksti + LLM — uzun tavsiflar
-  if (!GEMINI_KEY) return notFound();
+  if (!AI_LLM_ENABLED) return notFound();
 
-  const contextResults = GEMINI_GROUNDING_TEXT
-    ? []
-    : await serperSearch(`${query} qaysi film kino`, 'uz', 'uz');
-  const snippets = GEMINI_GROUNDING_TEXT
-    ? '(Google Search grounding yoqilgan — qidiruv model ichida)'
-    : contextResults.slice(0, 3).map(r => `${r.title}: ${r.snippet}`).join('\n\n');
+  const contextResults = await serperSearch(`${query} qaysi film kino`, 'uz', 'uz');
+  const snippets =
+    contextResults.length > 0
+      ? contextResults.slice(0, 3).map(r => `${r.title}: ${r.snippet}`).join('\n\n')
+      : '(Veb qidiruv natijalari bo‘sh — faqat foydalanuvchi tavsifiga tayan)';
 
   const llmPrompt = `You are a professional world cinema expert with deep knowledge of Hollywood, Turkish, Korean, Russian, Kazakh, Kyrgyz, Uzbek, Azerbaijani, Tajik, and other CIS/SNG cinema. You also know Bollywood, Iranian, and Arab cinema.
 The user (Uzbek-speaking) might be describing a specific scene, plot, or character they remember. The film could be from ANY country.
 
 USER QUERY: "${query}"
-GOOGLE SEARCH CONTEXT (clues):
+WEB SEARCH SNIPPETS (clues, may be empty):
 ${snippets}
 
 Rules:
@@ -1379,27 +1234,7 @@ Respond ONLY with this JSON structure:
 {"title": "Most searchable title for this film", "type": "movie" or "tv", "confidence": "high/medium/low"}`;
 
   try {
-    const genAI = new GoogleGenerativeAI(GEMINI_KEY);
-    const model = GEMINI_GROUNDING_TEXT
-      ? genAI.getGenerativeModel({
-          model: GEMINI_MODEL,
-          tools: [
-            {
-              googleSearchRetrieval: {
-                dynamicRetrievalConfig: {
-                  mode: DynamicRetrievalMode.MODE_DYNAMIC,
-                  dynamicThreshold: 0.3,
-                },
-              },
-            },
-          ],
-        })
-      : genAI.getGenerativeModel({ model: GEMINI_MODEL });
-    const result = await tapGeminiGenerateContent(
-      GEMINI_GROUNDING_TEXT ? 'identifyFromText_grounding' : 'identifyFromText_llm',
-      withGemini(() => model.generateContent(llmPrompt))
-    );
-    const textResponse = result.response.text();
+    const textResponse = await azureChatText('identifyFromText_llm', llmPrompt);
     console.log(`🤖 Text identification (LLM): "${query}" -> Response:`, textResponse);
 
     const m = textResponse.match(/\{[\s\S]*?\}/);
@@ -1499,15 +1334,8 @@ export async function identifyFromText(query: string): Promise<MovieIdentified |
 
 async function translateToUzbek(text: string): Promise<string> {
   if (!text) return text;
-  if (!GEMINI_KEY) return text;
-  try {
-    const genAI = new GoogleGenerativeAI(GEMINI_KEY);
-    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-    const r = await tapGeminiGenerateContent(
-      'translateToUzbek',
-      withGemini(() =>
-      model.generateContent(
-        `Translate the following movie plot into Uzbek using Latin script only.
+  if (!AI_LLM_ENABLED) return text;
+  const tPrompt = `Translate the following movie plot into Uzbek using Latin script only.
 
 Output rules (critical):
 - Return ONLY the translated plot text. No title, no preamble.
@@ -1515,10 +1343,9 @@ Output rules (critical):
 - Do NOT repeat the instructions.
 
 Plot to translate:
-${text}`
-      )
-    ));
-    let out = r.response.text()?.trim() || text;
+${text}`;
+  try {
+    let out = (await azureChatText('translateToUzbek', tPrompt))?.trim() || text;
     const parts = out.split(/\n\n+/).filter((p) => {
       const t = p.trim();
       if (!t) return false;
@@ -1541,19 +1368,12 @@ async function translateTitle(
   year: string,
   mediaType: MediaType,
 ): Promise<string> {
-  if (!GEMINI_KEY) return displayTitle;
+  if (!AI_LLM_ENABLED) return displayTitle;
   const kind = mediaType === 'tv' ? 'TV show' : 'movie';
   const orig = (originalTitle || '').trim();
   const disp = (displayTitle || '').trim();
   const y = (year || '').trim();
-  try {
-    const genAI = new GoogleGenerativeAI(GEMINI_KEY);
-    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-    const r = await tapGeminiGenerateContent(
-      'translateTitle',
-      withGemini(() =>
-      model.generateContent(
-        `You are naming this ${kind} for Uzbek-speaking viewers (dubs, streaming, cinema).
+  const titlePrompt = `You are naming this ${kind} for Uzbek-speaking viewers (dubs, streaming, cinema).
 
 TMDB English/international title: "${disp}"
 Original title (may differ from English for foreign films): "${orig || disp}"
@@ -1564,10 +1384,10 @@ Rules — CRITICAL:
 2. Output the title that is actually used on Uzbek posters, TV, or sites like uzmovi / kinoxit when you know it. If several names exist, pick the most common search term users type.
 3. If there is no well-known Uzbek market title, output the English title "${disp}" unchanged, not a guessed translation.
 4. Output ONLY the Uzbek market title or English title — one line, no quotes, no explanation.
-5. IMPORTANT: Output MUST be in Uzbek Latin script. Do NOT use Cyrillic characters. If you know the title only in Cyrillic, transliterate it to Uzbek Latin (e.g. "Sargardon Zamin" not "Блуждающая Земля").`
-      )
-    ));
-    const raw = r.response.text()?.trim().replace(/^["']|["']$/g, '') || displayTitle;
+5. IMPORTANT: Output MUST be in Uzbek Latin script. Do NOT use Cyrillic characters. If you know the title only in Cyrillic, transliterate it to Uzbek Latin (e.g. "Sargardon Zamin" not "Блуждающая Земля").`;
+  try {
+    const raw =
+      (await azureChatText('translateTitle', titlePrompt))?.trim().replace(/^["']|["']$/g, '') || displayTitle;
     // Kirill harflari kelsa — noto'g'ri, displayTitle qaytaramiz
     const hasCyrillic = /[\u0400-\u04ff]/.test(raw);
     const result = hasCyrillic ? displayTitle : raw;
@@ -2064,17 +1884,8 @@ const IG_USERNAME_RE = /^[a-z0-9][a-z0-9._]{3,28}[a-z0-9]$/;
  * Model avval platformani aniqlaydi — Instagram emasligiga ishonch hosil qilsa null qaytaradi.
  */
 export async function extractInstagramSource(base64: string, telegramUserId?: number): Promise<string | null> {
-  if (!GEMINI_KEY) return null;
-  try {
-    const compact = await downscaleForInstagramExtract(base64);
-    const genAI = new GoogleGenerativeAI(GEMINI_KEY);
-    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-    const result = await tapGeminiGenerateContent(
-      'extractInstagramSource',
-      withGemini(() =>
-      model.generateContent([
-        { inlineData: { data: compact, mimeType: 'image/jpeg' } },
-        `Look at this image carefully.
+  if (!AI_LLM_ENABLED) return null;
+  const igPrompt = `Look at this image carefully.
 
 Step 1 — Is this clearly an Instagram screenshot (Reels or post)?
 You must see Instagram-specific UI elements: the Instagram profile avatar circle, username text next to it, follow button, like/comment/share icons in Instagram style, or @handle overlay on a Reel.
@@ -2091,12 +1902,10 @@ or
 Rules:
 - account must be the raw username, no @ symbol, lowercase
 - If you see multiple usernames (e.g. collab post), return the PRIMARY/first account
-- Return null if you cannot clearly read the username or are not sure`,
-      ])
-    ),
-      telegramUserId
-    );
-    const text = result.response.text();
+- Return null if you cannot clearly read the username or are not sure`;
+  try {
+    const compact = await downscaleForInstagramExtract(base64);
+    const text = await azureChatVision('extractInstagramSource', compact, 'image/jpeg', igPrompt, telegramUserId);
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return null;
     const parsed = JSON.parse(m[0]) as { platform?: string | null; account?: string | null };

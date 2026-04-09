@@ -1,0 +1,12 @@
+# Kinova VPS: faqat localhost — tashqaridan ochiq emas (bot bilan bir serverda).
+# Ishga tushirish: bash install.sh (shu papkada)
+services:
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    container_name: kinova-searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./config:/etc/searxng:rw
+      - ./data:/var/cache/searxng:rw
