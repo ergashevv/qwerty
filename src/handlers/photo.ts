@@ -80,7 +80,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
   let processing: { message_id: number } | undefined;
   try {
     await runWithLlmUsageContext(userId, async () => {
-    processing = await ctx.reply('🔍 Qidirilmoqda...');
+    processing = await ctx.reply('🔍 Qidiruv: rasm tahlil qilinmoqda...');
     void ctx.api.sendChatAction(chatId, 'typing');
 
     await Promise.all([
@@ -154,7 +154,11 @@ export async function handlePhoto(ctx: Context): Promise<void> {
     // Rasm orqali topilmadi — matn hint bilan fallback
     if (!identified && textHint) {
       console.log(`📝 Foto topilmadi, matn hint: "${textHint}"`);
-      await ctx.api.editMessageText(chatId, msgId, `🔍 "${textHint.slice(0, 50)}" bo'yicha qidirilmoqda...`);
+      await ctx.api.editMessageText(
+        chatId,
+        msgId,
+        `🔍 Qidiruv: «${textHint.slice(0, 50)}» bo'yicha matn tekshirilmoqda...`
+      );
       const textResult = await identifyFromTextDetailed(textHint);
       if (textResult.outcome === 'found') {
         identified = textResult.identified;
@@ -304,16 +308,15 @@ export function buildTelegramShareUrl(details: MovieDetails, botUsername: string
   const u = botUsername.replace(/^@/, '').trim();
   if (!u) return null;
   const botLink = `https://t.me/${u}`;
-  const mainTitle = details.title || details.originalTitle || details.uzTitle || 'Film';
+  const intl = details.title || details.originalTitle || '';
+  const uz = (details.uzTitle || '').trim();
+  const mainTitle = uz || intl || 'Film';
 
   const shareTextVariants = (): string[] => {
-    const out: string[] = [];
-    const head = `🎬 ${mainTitle}`;
-    if (details.uzTitle && details.uzTitle !== mainTitle) {
-      out.push(`${head}\n📽 ${details.uzTitle}`);
+    if (uz && intl && intl.toLowerCase() !== uz.toLowerCase()) {
+      return [`🎬 ${uz}\n🌍 ${intl}`, `🎬 ${uz}`];
     }
-    out.push(head);
-    return out;
+    return [`🎬 ${mainTitle}`];
   };
 
   for (const text of shareTextVariants()) {
@@ -331,17 +334,22 @@ export function buildTelegramShareUrl(details: MovieDetails, botUsername: string
 
 export function buildMovieResultCaption(
   details: MovieDetails,
-  opts?: { confidence?: string | null }
+  opts?: { confidence?: string | null; feedbackHint?: boolean }
 ): string {
-  const mainTitle = details.title || details.originalTitle || details.uzTitle;
-  const uzLine =
-    details.uzTitle && details.uzTitle !== mainTitle
-      ? `\n📽 O'zbekcha: <b>${escHtml(details.uzTitle)}</b>`
+  const uz = (details.uzTitle || '').trim();
+  const intl = (details.title || details.originalTitle || '').trim();
+  const headline = uz || intl || 'Film';
+  const intlLine =
+    intl && intl.toLowerCase() !== uz.toLowerCase()
+      ? `\n🌍 <i>${escHtml(intl)}</i>`
       : '';
   const yearLine = details.year ? ` | 📅 ${details.year}` : '';
   const ratingLine = details.rating !== 'N/A' ? ` | ⭐ ${details.rating}/10` : '';
   const confidenceLine =
     opts?.confidence === 'medium' ? `\n\n<i>🤖 AI taklifi — noto'g'ri bo'lishi mumkin.</i>` : '';
+  const feedbackHintLine = opts?.feedbackHint
+    ? `\n\n<i>👆 Natija to‘g‘rimi? Pastdagi 2 ta tugmani bosing — bot uchun juda foydali (1–2 soniya).</i>`
+    : '';
 
   const buildWithPlotLimit = (plotLimit: number) => {
     const plotPart =
@@ -349,11 +357,12 @@ export function buildMovieResultCaption(
         ? details.plotUz
         : `${details.plotUz.slice(0, plotLimit)}...`;
     return [
-      `🎬 <b>${escHtml(mainTitle)}</b>${uzLine}`,
+      `🎬 <b>${escHtml(headline)}</b>${intlLine}`,
       `${yearLine}${ratingLine}`.trim(),
       ``,
       `📖 ${escHtml(plotPart)}`,
       confidenceLine,
+      feedbackHintLine,
     ]
       .filter(Boolean)
       .join('\n');
@@ -386,7 +395,7 @@ export function buildWatchKeyboard(details: MovieDetails): InlineKeyboardButton[
     details.uzTitle;
   rows.push([
     {
-      text: '🔍 Qidiruv',
+      text: '🔍 Qo‘shimcha qidiruv',
       url: `https://duckduckgo.com/?q=${encodeURIComponent(q + ' uzbek tilida')}`,
     },
   ]);
@@ -399,15 +408,26 @@ export async function sendMovieResult(
   details: MovieDetails,
   opts?: { pendingFeedbackToken?: string; confidence?: string | null }
 ): Promise<void> {
-  const caption = buildMovieResultCaption(details, opts);
-
-  const watchButtons = buildWatchKeyboard(details);
   const pTok = opts?.pendingFeedbackToken;
+  const caption = buildMovieResultCaption(details, {
+    confidence: opts?.confidence,
+    feedbackHint: Boolean(pTok && pTok.length > 0),
+  });
+
+  /** Tugmalar: avvalo tomosha/IMDb, keyin fikr (Qo‘shimcha qidiruvdan yuqori — ko‘proq bosiladi). */
+  const watchButtons = buildWatchKeyboard(details);
   if (pTok != null && pTok.length > 0) {
-    watchButtons.push([
-      { text: '✅ Ha, shu film', callback_data: `fb:${pTok}:y` },
-      { text: "❌ Yo'q, bu emas", callback_data: `fb:${pTok}:n` },
-    ]);
+    const feedbackRow: (typeof watchButtons)[0] = [
+      { text: '✅ Ha, to‘g‘ri film', callback_data: `fb:${pTok}:y` },
+      { text: "❌ Boshqa film", callback_data: `fb:${pTok}:n` },
+    ];
+    const last = watchButtons[watchButtons.length - 1];
+    const ddgRow =
+      last?.[0] && 'url' in last[0] && String(last[0].url || '').includes('duckduckgo.com')
+        ? watchButtons.pop()
+        : undefined;
+    watchButtons.push(feedbackRow);
+    if (ddgRow) watchButtons.push(ddgRow);
     const botUser = ctx.me?.username ?? process.env.BOT_USERNAME?.replace(/^@/, '')?.trim();
     const shareUrl = botUser ? buildTelegramShareUrl(details, botUser) : null;
     if (shareUrl) {

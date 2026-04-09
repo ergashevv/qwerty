@@ -20,7 +20,7 @@ import { buildWatchKeyboard, sendMovieResult } from './photo';
 import { USER_REQUEST_LIMIT, isUnlimitedUser } from '../config/limits';
 import { extractInstagramReelUrl, extractYouTubeUrl } from '../services/reelsUrl';
 import { handleVideoLink } from './reels';
-import { STATUS_DETAILS_LINES, withRotatingStatus } from './rotatingStatus';
+import { STATUS_DETAILS_LINES, STATUS_TEXT_SEARCH_LINES, withRotatingStatus } from './rotatingStatus';
 import { setUserTextContext } from '../services/userContext';
 import { completeSurveyProblemText, getSurveyProblemPending } from '../db/surveyBroadcast';
 import { tryCompleteProblemReport } from './problemReportSubmit';
@@ -122,7 +122,7 @@ export async function handleText(ctx: Context): Promise<void> {
   let processing: { message_id: number } | undefined;
   try {
     await runWithLlmUsageContext(userId, async () => {
-    processing = await ctx.reply('🔍 Qidirilmoqda...');
+    processing = await ctx.reply('🔍 Qidiruv boshlandi — kino qidirilmoqda...');
     void ctx.api.sendChatAction(ctx.chat!.id, 'typing');
     void recordSearchRequest(userId, 'text', { queryText: text }).catch(() => {});
 
@@ -130,8 +130,9 @@ export async function handleText(ctx: Context): Promise<void> {
       ctx,
       ctx.chat!.id,
       processing.message_id,
-      ['·'],
-      () => identifyFromTextDetailed(text)
+      STATUS_TEXT_SEARCH_LINES,
+      () => identifyFromTextDetailed(text),
+      { intervalMs: 3600 }
     );
 
     if (idOutcome.outcome === 'unclear') {
@@ -152,12 +153,13 @@ export async function handleText(ctx: Context): Promise<void> {
       await ctx.api.editMessageText(
         ctx.chat!.id,
         processing.message_id,
-        '❌ Film topilmadi.\n\n' +
-          '<b>Keyingi qadam:</b>\n' +
-          '• Film nomi (ingliz yoki o‘zbek)\n' +
-          '• Aktyor yoki rejissor ismi\n' +
-          '• Yil yoki janr (masalan: 2010, drama)\n' +
-          '• Eskidan eslayotgan sahna yoki syujetni 2–3 qator yozing',
+        '❌ <b>Qidiruv yakunlandi</b> — film topilmadi.\n\n' +
+          'Iltimos, qayta urinish oson bo‘lishi uchun <b>kino bilan bog‘liq rasm</b> (kadrs) yoki <b>aniqroq matn</b> yuboring.\n\n' +
+          '<b>Matn bilan sinash:</b>\n' +
+          '• Film nomi (lotin yoki kirill)\n' +
+          '• Serial/film + taxminan yil\n' +
+          '• Aktyor yoki rejissor\n' +
+          '• Syujet yoki esda qolgan sahna (2–4 qator)',
         { parse_mode: 'HTML' }
       );
       return;

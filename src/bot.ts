@@ -182,8 +182,8 @@ async function bootstrap(): Promise<void> {
         `🎬 Film nomi (o'zbekcha)\n` +
         `📖 Qisqacha mazmun\n` +
         `▶️ Tomosha havolalari (tugmalar) · 📩 Ulashish (qisqa matn + bot havolasi)\n\n` +
-        `<b>Fikr:</b> <b>✅ Ha, shu film</b> / <b>❌ Yo'q, bu emas</b>. ` +
-        `<code>/feedback</code> / <b>Yo‘q</b> — keyingi xabar qisqa shikoyat (qidiruv emas).`,
+        `<b>Fikr (iltimos, bosing):</b> <b>✅ To‘g‘ri film</b> / <b>❌ Boshqa film</b> — natija to‘g‘ri yoki yo‘qligini bildirish botni yaxshilaydi. ` +
+        `<code>/feedback</code> — alohida shikoyat matni.`,
       { parse_mode: 'HTML' }
     );
   });

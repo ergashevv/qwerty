@@ -45,7 +45,11 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
    * DB sekin bo‘lsa — "query is too old", foydalanuvchi hech narsa ko‘rmaydi.
    * Avvalo callback ni yopamiz (matnsiz — ikkinchi bosishda noto‘g‘ri "Rahmat" chiqmasin).
    */
-  await ctx.answerCallbackQuery(vote === 'y' ? { text: 'Rahmat ❤️' } : {});
+  await ctx.answerCallbackQuery(
+    vote === 'y'
+      ? { text: 'Rahmat — bot shu bilan o‘rganadi ❤️' }
+      : { text: 'Tushundim. Iltimos, qisqa izoh yozing ✍️' }
+  );
 
   let row;
   try {

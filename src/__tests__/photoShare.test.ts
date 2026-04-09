@@ -35,6 +35,7 @@ describe('buildMovieResultCaption', () => {
     expect(c).not.toMatch(/Tomosha havolalari/);
     expect(c).not.toMatch(/Poster va barcha havolalar/);
     expect(c).not.toMatch(/Ulashish/);
+    expect(c).toMatch(/Kremniy vodiysi/);
     expect(c).toMatch(/Silicon Valley/);
   });
 });
@@ -46,7 +47,8 @@ describe('buildTelegramShareUrl', () => {
     const m = u!.match(/text=([^&]+)/);
     expect(m).not.toBeNull();
     const text = decodeURIComponent(m![1]);
-    expect(text).toMatch(/🎬 Silicon Valley/);
+    expect(text).toMatch(/🎬 Kremniy vodiysi/);
+    expect(text).toMatch(/Silicon Valley/);
     expect(text).not.toMatch(/Tomosha havolalari/);
     expect(text).not.toMatch(/Poster va barcha havolalar/);
     expect(text).not.toMatch(/https:\/\/uzbeklar/);

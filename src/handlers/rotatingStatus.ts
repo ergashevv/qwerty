@@ -10,6 +10,14 @@ export const STATUS_IDENTIFY_LINES = [
   '🎞️ Deyarli tayyor...',
 ];
 
+/** Matn bo‘yicha qidiruv (aniqlash bosqichi) */
+export const STATUS_TEXT_SEARCH_LINES = [
+  '🔍 Qidiruv: nom va bazalar tekshirilmoqda...',
+  '🔎 TMDB / OMDB va boshqa manbalar...',
+  '⏳ Aniq javob uchun biroz kuting...',
+  '🧠 Syujet bo‘lsa, AI bilan solishtirilmoqda...',
+];
+
 /** Ma’lumotlar (poster, tavsif) yig‘ilganda */
 export const STATUS_DETAILS_LINES = (filmTitle: string) => [
   `🎯 «${filmTitle}» topildi — ma’lumotlar yig‘ilmoqda...`,

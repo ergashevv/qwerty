@@ -68,6 +68,18 @@ const AI_IMAGE_MAX_EDGE = Math.min(
 const INSTAGRAM_EXTRACT_MAX_EDGE = Math.min(1280, Math.max(480, parseInt(process.env.INSTAGRAM_EXTRACT_MAX_EDGE || '720', 10)));
 const TIMEOUT    = 8000;
 
+/** Vergul bilan ajratilgan domenlar — tomosh havolalari ro'yxatidan chiqariladi (masalan: bir sayt boshqalarini bosib qolganda). */
+function watchLinkBannedHosts(): Set<string> {
+  const raw = process.env.WATCH_LINK_BANNED_HOSTS?.trim();
+  if (!raw) return new Set();
+  return new Set(
+    raw
+      .split(/[\s,]+/)
+      .map((h) => h.replace(/^https?:\/\//i, '').replace(/^www\./i, '').split('/')[0]?.toLowerCase())
+      .filter(Boolean),
+  );
+}
+
 // ─── YORDAMCHI ───────────────────────────────────────────────────────────────
 
 export function normalizeTitle(t: string): string {
@@ -449,7 +461,7 @@ async function searxngSearch(query: string): Promise<WebSearchSnippet[]> {
     const rawResults = r.data?.results;
     if (!Array.isArray(rawResults) || rawResults.length === 0) return [];
     return rawResults
-      .slice(0, 10)
+      .slice(0, 15)
       .map((item: { title?: string; url?: string; content?: string }) => ({
         title: String(item.title ?? '').trim(),
         link: String(item.url ?? '').trim(),
@@ -734,7 +746,9 @@ Rules:
     const parsed = JSON.parse(m[0]) as { title?: string; type?: string; confidence?: string };
     if (!parsed.title || parsed.title.toLowerCase() === 'unknown') return null;
     const gemConf = (parsed.confidence || '').toLowerCase();
-    if (gemConf !== 'high' && gemConf !== 'medium') return null;
+    // "low" ham saqlanadi: asosiy tartibda asosan ishlatilmaydi, lekin boshqa signal bo'lmasa
+    // tasdiq (llmVerifyCandidate) bosqichiga yuboriladi — aks holda "Tasdiq uchun nomzod yo'q".
+    if (gemConf !== 'high' && gemConf !== 'medium' && gemConf !== 'low') return null;
 
     const verified = await omdbSearch(parsed.title);
     if (verified) return { title: verified.title, type: verified.type, confidence: parsed.confidence };
@@ -930,6 +944,10 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
     if (visionLlm && visionLlm.confidence !== 'low') {
       pushDistinct(ordered, visionLlm);
     }
+    // Faqat vision "low" bersa ham (yoki faces yo'q): tasdiq tsikl ishlashi uchun oxirgi imkon
+    if (ordered.length === 0) {
+      pushDistinct(ordered, visionLlm);
+    }
   }
 
   console.log(`Nomzodlar tartibi (tasdiq): ${ordered.map((c) => c.title).join(' → ') || '—'}`);
@@ -1061,6 +1079,26 @@ export async function getActorFilmFallbackCandidates(
  * WALL-E ga xos syujet (o‘zbek/rus/lotin): kelajak, odamlar semirish, kursilarda passiv, bitta asosiy robot.
  * LLM ba’zan faqat "robot + sevgi" ni Love, Death & Robots bilan adashtiradi — shu uchun deterministik yo‘l.
  */
+/**
+ * Uzun syujet / gap ko'rinishidagi so'rovlarda TMDB/OMDB "birinchi nomzod"ni qabul qilmaslik —
+ * foydalanuvchi "noto'g'ri topildi" deb yozadi.
+ */
+function looksLikeSentencePlot(q: string): boolean {
+  const t = q.trim();
+  if (t.length > 95) return true;
+  const wc = t.split(/\s+/).filter(Boolean).length;
+  if (wc > 11) return true;
+  if (/[.!?][\s\S]{20,}[.!?]/.test(t)) return true;
+  if (
+    /\b(film|kino|serial)(da|ni|ni)?\b/i.test(t) &&
+    /\b(edi|ekan|idi|qilgan|bo\'lgan|uchun|chunki|demak|keyin|boshida|oxirida|qachon|qayerda|kim)\b/i.test(t) &&
+    wc >= 6
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function looksLikeWallEPlotDescription(q: string): boolean {
   const n = q
     .toLowerCase()
@@ -1092,6 +1130,19 @@ Answer ONLY "yes" or "no".`;
     return true;
   } catch {
     return true;
+  }
+}
+
+async function fetchTmdbLocalizedRecord(mediaType: MediaType, id: number, lang: string): Promise<TmdbResult | null> {
+  if (!TMDB_KEY) return null;
+  try {
+    const r = await axios.get(`https://api.themoviedb.org/3/${mediaType}/${id}`, {
+      params: { api_key: TMDB_KEY, language: lang },
+      timeout: TIMEOUT,
+    });
+    return r.data as TmdbResult;
+  } catch {
+    return null;
   }
 }
 
@@ -1128,8 +1179,9 @@ export async function identifyFromTextDetailed(query: string): Promise<IdentifyF
   const normalizedQuery = query.trim().toLowerCase();
   const words = normalizedQuery.split(/\s+/).filter(w => w.length > 2);
 
-  // 1. Literal OMDB/TMDB check — faqat QISQA so'rovlar (nomlar) uchun
-  if (words.length <= 4) {
+  // 1. Literal OMDB/TMDB — nom bo'lib ko'rinadigan qisqa so'rovlar (7 gacha so'z; syujet emas)
+  const literalWordOk = words.length >= 1 && words.length <= 7;
+  if (literalWordOk && !looksLikeSentencePlot(query)) {
     const omdb = await omdbSearch(query);
     if (omdb) return found({ title: omdb.title, type: omdb.type });
 
@@ -1162,7 +1214,7 @@ export async function identifyFromTextDetailed(query: string): Promise<IdentifyF
 
 
   // 2c. Kinopoisk — SNG/CIS/turk filmlar uchun asosiy fallback (OMDB/TMDB topilmasa)
-  if (KP_KEY && words.length <= 5) {
+  if (KP_KEY && words.length <= 7) {
     const kp = await kinopoiskSearch(query);
     if (kp) {
       const kpTitle = kp.film.nameEn || kp.film.nameOriginal || kp.film.nameRu || '';
@@ -1189,25 +1241,25 @@ export async function identifyFromTextDetailed(query: string): Promise<IdentifyF
       ? contextResults.slice(0, 3).map(r => `${r.title}: ${r.snippet}`).join('\n\n')
       : '(Veb qidiruv natijalari bo‘sh — faqat foydalanuvchi tavsifiga tayan)';
 
-  const llmPrompt = `You are a professional world cinema expert with deep knowledge of Hollywood, Turkish, Korean, Russian, Kazakh, Kyrgyz, Uzbek, Azerbaijani, Tajik, and other CIS/SNG cinema. You also know Bollywood, Iranian, and Arab cinema.
-The user (Uzbek-speaking) might be describing a specific scene, plot, or character they remember. The film could be from ANY country.
+  const llmPrompt = `You are a professional world cinema expert (Hollywood, Turkish, Korean, Russian, Kazakh, Kyrgyz, Uzbek, CIS/SNG, Bollywood, Iranian, Arab, etc.).
+The user writes in Uzbek (Latin/Cyrillic) or Russian; they may paste a title, a poor transliteration, OR a scene/plot memory. The work can be from any country.
 
 USER QUERY: "${query}"
-WEB SEARCH SNIPPETS (clues, may be empty):
+WEB SEARCH SNIPPETS (may be empty or noisy):
 ${snippets}
 
 Rules:
-1. Match the USER'S FULL PLOT, not only loose keywords. Example: "robot" + "love" appears in many works — pick the one whose ENTIRE scenario fits (setting, premise, ending).
-2. Prefer a single famous FEATURE FILM over an anthology TV series when the description is one continuous story.
-3. For CIS/SNG films: provide the most widely known title — could be Russian, Kazakh, Turkish, or English depending on which is most searchable. Example: Kazakh film "Nomad" is better than its Kazakh title "Көшпенділер".
-4. For Turkish films/series: provide the original Turkish title (e.g. "Diriliş: Ertuğrul", not translated).
-5. For Hollywood/international: provide the original English title.
-6. DO NOT translate the movie title literally into Uzbek.
-7. If the description sounds like a CIS/Central Asian film (steppe landscape, nomad culture, Soviet-era setting, collective farm, etc.) — consider CIS cinema first.
-8. If two titles share words but only one matches the plot details, choose that one. If still ambiguous, use confidence "medium" or "low".
+1. Plot descriptions: match the USER'S scenario (setting + premise), not loose keywords ("robot"+"love" alone is NOT enough).
+2. If the query is mainly a TITLE (few words, no story): pick the film/series that matches that title in any script; prefer the standard English or original release title for TMDB lookup.
+3. Prefer one famous FEATURE FILM over an anthology when the story is one continuous narrative.
+4. CIS/SNG: use the most searchable primary title (sometimes Russian or English trade title, not a literal Uzbek translation of words).
+5. Turkish: original Turkish title. Hollywood: original English title.
+6. Output "title" must be the primary lookup string for TMDB/OMDB (NOT Uzbek marketing wording in the JSON — the bot adds Uzbek display separately).
+7. If CIS/Central Asian setting is strongly suggested, consider CIS cinema before defaulting to Hollywood.
+8. If still unsure but one title is most likely, use confidence "medium". Reserve "low" only when wildly ambiguous.
 
-Respond ONLY with this JSON structure:
-{"title": "Most searchable title for this film", "type": "movie" or "tv", "confidence": "high/medium/low"}`;
+Respond ONLY with JSON:
+{"title": "Primary searchable title", "type": "movie" or "tv", "confidence": "high/medium/low"}`;
 
   try {
     const textResponse = await azureChatText('identifyFromText_llm', llmPrompt);
@@ -1218,7 +1270,6 @@ Respond ONLY with this JSON structure:
       const p = JSON.parse(m[0]) as { title?: string; type?: string; confidence?: string };
       const conf = (p.confidence || '').toLowerCase();
       if (!p.title || p.title.toLowerCase() === 'unknown') return notFound();
-      if (conf === 'low') return unclear();
 
       let verifiedTitle: string | null = null;
       let verifiedType: MediaType = p.type === 'tv' ? 'tv' : 'movie';
@@ -1272,7 +1323,11 @@ Respond ONLY with this JSON structure:
       }
 
       if (verifiedTitle) {
-        return found({ title: verifiedTitle, type: verifiedType });
+        return found({
+          title: verifiedTitle,
+          type: verifiedType,
+          confidence: conf === 'high' ? undefined : 'medium',
+        });
       }
 
       if (conf === 'high') {
@@ -1360,7 +1415,8 @@ Rules — CRITICAL:
 2. Output the title that is actually used on Uzbek posters, TV, or sites like uzmovi / kinoxit when you know it. If several names exist, pick the most common search term users type.
 3. If there is no well-known Uzbek market title, output the English title "${disp}" unchanged, not a guessed translation.
 4. Output ONLY the Uzbek market title or English title — one line, no quotes, no explanation.
-5. IMPORTANT: Output MUST be in Uzbek Latin script. Do NOT use Cyrillic characters. If you know the title only in Cyrillic, transliterate it to Uzbek Latin (e.g. "Sargardon Zamin" not "Блуждающая Земля").`;
+5. IMPORTANT: Output MUST be in Uzbek Latin script. Do NOT use Cyrillic characters. If you know the title only in Cyrillic, transliterate it to Uzbek Latin (e.g. "Sargardon Zamin" not "Блуждающая Земля").
+6. If the film is only known in Uzbekistan under the original English (or Turkish, Korean, etc.) title, output that title unchanged — do NOT invent a "translation".`;
   try {
     const raw =
       (await azureChatText('translateTitle', titlePrompt))?.trim().replace(/^["']|["']$/g, '') || displayTitle;
@@ -1407,6 +1463,8 @@ function isAllowedWatchUrl(url: string, title?: string): boolean {
     if (!['https:', 'http:'].includes(u.protocol)) return false;
     if (title && /\b(pdf|kitob|leksiya|referat)\b/i.test(title)) return false;
     const host = canonHost(url);
+    const banned = watchLinkBannedHosts();
+    if (banned.has(host)) return false;
     if (BLOCKED_HOSTS.some(b => host === b || host.endsWith(`.${b}`))) return false;
     return ALLOWED_HOSTS.some(a => host === a || host.endsWith(`.${a}`));
   } catch { return false; }
@@ -1718,7 +1776,18 @@ export async function buildDetailsFromResolved(identified: MovieIdentified, meta
   const rating = tmdbResult.vote_average ? tmdbResult.vote_average.toFixed(1) : 'N/A';
   const posterUrl = tmdbResult.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbResult.poster_path}` : null;
   const englishPlot = tmdbResult.overview || '';
-  const uzTitle = await translateTitle(displayTitle, originalTitle, year, type);
+  const uzRec = tmdbResult.id
+    ? await fetchTmdbLocalizedRecord(type, tmdbResult.id, 'uz-UZ')
+    : null;
+  const tmdbUzLine = ((type === 'tv' ? uzRec?.name : uzRec?.title) || '').trim();
+  const tmdbUzUsable =
+    tmdbUzLine.length > 0 &&
+    !titlesMatch(tmdbUzLine, displayTitle) &&
+    !titlesMatch(tmdbUzLine, originalTitle);
+
+  const uzTitle = tmdbUzUsable
+    ? tmdbUzLine
+    : await translateTitle(displayTitle, originalTitle, year, type);
   const [plotUz, watchLinks] = await Promise.all([
     englishPlot ? translateToUzbek(englishPlot) : Promise.resolve('Tavsif mavjud emas'),
     findWatchLinks(displayTitle, originalTitle, year, uzTitle, imdbId),

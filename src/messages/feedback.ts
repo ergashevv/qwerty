@@ -16,8 +16,8 @@ export const FEEDBACK_WRONG_MEDIA_HTML = `Iltimos, rasm yoki matn yuboring.`;
 export const FEEDBACK_COMMAND_HELP_HTML =
   `ℹ️ <b>Shikoyat va fikr</b>\n\n` +
   `<code>/feedback</code> — keyingi matn xabaringiz shikoyat sifatida yuboriladi.\n\n` +
-  `Har bir topilgan film ostida <b>Ha, shu film</b> va <b>Yo‘q, bu emas</b> tugmalari chiqadi. ` +
-  `<b>Yo‘q</b> bosganda ham keyingi matningiz shikoyat sifatida saqlanadi.\n\n` +
+  `Har bir topilgan film ostida <b>To‘g‘ri film</b> / <b>Boshqa film</b> tugmalari chiqadi — iltimos, bosing: statistika botni yaxshilaydi. ` +
+  `<b>Boshqa film</b> bosilsa, keyingi matningiz qisqa shikoyat sifatida saqlanadi.\n\n` +
   `Rasm yuborayotgan bo‘lsangiz, shikoyatni <b>caption</b>da yozing yoki alohida matn yuboring.`;
 
 export const FEEDBACK_CANCEL_NOTHING_HTML =

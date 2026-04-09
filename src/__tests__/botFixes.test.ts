@@ -327,7 +327,7 @@ describe('Text handler — darhol "Qidirilmoqda..." xabari', () => {
     // reply should come before or at same time as DB ops
     // (upsertUser runs before reply in current code — that's OK, the key point is
     // reply comes before recordSearchRequest and heavy AI work)
-    expect(replyMock).toHaveBeenCalledWith('🔍 Qidirilmoqda...');
+    expect(replyMock).toHaveBeenCalledWith('🔍 Qidiruv boshlandi — kino qidirilmoqda...');
     // Ensure DB operations are also called (handler ran fully)
     expect(dbIdx).toBeGreaterThanOrEqual(0);
   });
