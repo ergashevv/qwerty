@@ -938,6 +938,12 @@ async function cropFrame(base64: string): Promise<string> {
     const h = meta.height || 1920;
     const ratio = w / h;
 
+    // Kino posterlari (~2:3, 3:4): sarlavha va billing odatda tepa/pastda — kesish matnni yo'qotadi.
+    // TikTok/Reels (~9:16) uchun kesish saqlanadi (ratio ~0.5625).
+    if (ratio >= 0.58 && ratio <= 0.82) {
+      return base64;
+    }
+
     let cropTop: number, cropBottom: number;
     if (ratio >= 0.9) {
       cropTop = Math.round(h * 0.05); cropBottom = Math.round(h * 0.07);
