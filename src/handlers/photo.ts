@@ -13,7 +13,7 @@ import {
   extractInstagramSource,
   getActorFilmFallbackCandidates,
 } from '../services/movieService';
-import { runWithGeminiUsageContext } from '../services/geminiUsageContext';
+import { runWithLlmUsageContext } from '../services/llmUsageContext';
 import { insertAnalyticsEvent } from '../db/postgres';
 import { getRecentUserText, clearUserTextContext } from '../services/userContext';
 import {
@@ -73,7 +73,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
 
   let processing: { message_id: number } | undefined;
   try {
-    await runWithGeminiUsageContext(userId, async () => {
+    await runWithLlmUsageContext(userId, async () => {
     processing = await ctx.reply('🔍 Qidirilmoqda...');
     void ctx.api.sendChatAction(chatId, 'typing');
 
@@ -176,9 +176,9 @@ export async function handlePhoto(ctx: Context): Promise<void> {
       const hintMsg = textHint
         ? `\n\n💡 <i>"${textHint.slice(0, 40)}" bo'yicha matn qidiruv ham sinab ko'rildi — topilmadi.</i>`
         : '';
-      const geminiRejected =
-        photoFail && !photoFail.ok && photoFail.reason === 'gemini_verify_failed';
-      let body = geminiRejected
+      const llmRejected =
+        photoFail && !photoFail.ok && photoFail.reason === 'llm_verify_failed';
+      let body = llmRejected
         ? '🔍 <b>Nomzodlar topildi</b>, lekin kadr tanlangan film bilan to‘liq mos kelishini tasdiqlay olmadim — xato deb chiqarib yubormayapman.\n\n' +
           '<b>Keyingi qadam:</b>\n' +
           '• Boshqa kadr yoki aniqroq sahna (yuz / muhit yaxshi ko‘rinsin)\n' +
@@ -200,7 +200,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
           inline_keyboard: fb.candidates.map((c, i) => [
             {
               text: `${i + 1}. ${c.title.length > 46 ? `${c.title.slice(0, 45)}…` : c.title}`,
-              url: `https://www.google.com/search?q=${encodeURIComponent(`${c.title} film`)}`,
+              url: `https://duckduckgo.com/?q=${encodeURIComponent(`${c.title} film`)}`,
             },
           ]),
         };
@@ -364,7 +364,7 @@ export function buildMovieResultCaption(
   return `${last.slice(0, TELEGRAM_CAPTION_MAX - 3)}...`;
 }
 
-/** Tomosha havolalari + IMDb/Google — fikr tugmalari qo‘shilmasdan */
+/** Tomosha havolalari + IMDb — fikr tugmalari qo‘shilmasdan */
 export function buildWatchKeyboard(details: MovieDetails): InlineKeyboardButton[][] {
   const rows: InlineKeyboardButton[][] = details.watchLinks.slice(0, 4).map((link) => [
     { text: `▶️ ${link.source}`, url: link.link },
@@ -380,8 +380,8 @@ export function buildWatchKeyboard(details: MovieDetails): InlineKeyboardButton[
     details.uzTitle;
   rows.push([
     {
-      text: "🔍 Google'da qidirish",
-      url: `https://www.google.com/search?q=${encodeURIComponent(q + ' uzbek tilida')}`,
+      text: '🔍 Qidiruv',
+      url: `https://duckduckgo.com/?q=${encodeURIComponent(q + ' uzbek tilida')}`,
     },
   ]);
 
