@@ -5,6 +5,7 @@ import {
   identifyMovie,
   identifyFromTextDetailed,
   type IdentifyMovieResult,
+  type MovieIdentified,
   MovieDetails,
   buildDetailsFromResolved,
   buildDetailsWithoutTmdb,
@@ -40,6 +41,51 @@ import { getProblemReportPending } from '../db/feedbackProblemReport';
 import { tryCompleteProblemReport } from './problemReportSubmit';
 import { feedbackModeReplyMarkup } from './feedbackModeBack';
 import { PROBLEM_REPORT_PHOTO_NEED_CAPTION_HTML } from '../messages/feedback';
+
+const MAX_AMBIGUOUS_IDENTIFY_RESULTS = 4;
+
+/**
+ * Tasdiqdan o‘tmagan nomzodlar — har biri poster + qisqa ma’lumot + havolalar (fikr tug‘masiz).
+ */
+async function sendAmbiguousCandidateResults(ctx: Context, candidates: MovieIdentified[]): Promise<void> {
+  const n = Math.min(candidates.length, MAX_AMBIGUOUS_IDENTIFY_RESULTS);
+  for (let i = 0; i < n; i++) {
+    const identified = candidates[i];
+    const cacheRes = await resolveFilmCachePhase(identified);
+    let details: MovieDetails;
+    if (cacheRes.phase === 'hit') {
+      details = cacheRes.details;
+    } else {
+      const r = cacheRes.r;
+      details = r.ok
+        ? await buildDetailsFromResolved(identified, r.meta)
+        : await buildDetailsWithoutTmdb(identified, r.imdbId);
+    }
+    const variantHead =
+      `🎬 <b>Taxminiy variant ${i + 1}/${n}</b>` +
+      (identified.confidence
+        ? ` <i>(${escHtml(String(identified.confidence))})</i>`
+        : '') +
+      `\n\n`;
+    const caption =
+      variantHead +
+      buildMovieResultCaption(details, { confidence: 'medium', feedbackHint: false });
+    const kb = buildWatchKeyboard(details);
+    const opts = {
+      parse_mode: 'HTML' as const,
+      reply_markup: { inline_keyboard: kb },
+    };
+    try {
+      if (details.posterUrl) {
+        await ctx.replyWithPhoto(details.posterUrl, { caption, ...opts });
+      } else {
+        await ctx.reply(caption, opts);
+      }
+    } catch {
+      await ctx.reply(caption, opts);
+    }
+  }
+}
 
 export async function handlePhoto(ctx: Context): Promise<void> {
   const userId  = ctx.from?.id;
@@ -180,6 +226,24 @@ export async function handlePhoto(ctx: Context): Promise<void> {
       const hintMsg = textHint
         ? `\n\n💡 <i>"${textHint.slice(0, 40)}" bo'yicha matn qidiruv ham sinab ko'rildi — topilmadi.</i>`
         : '';
+      if (
+        photoFail &&
+        !photoFail.ok &&
+        photoFail.reason === 'llm_verify_failed' &&
+        photoFail.candidates.length > 0
+      ) {
+        const amb = photoFail.candidates;
+        await ctx.api.deleteMessage(chatId, processing.message_id).catch(() => {});
+        await ctx.reply(
+          '🔍 <b>Bir nechta nomzod topildi</b>, lekin bitta filmni 100% tasdiqlay olmadim.\n\n' +
+            'Quyida har birining <b>posteri</b> va <b>qisqa ma’lumoti</b> — o‘zingiz mosini tanlang. ' +
+            'Aniqlashtirish uchun yangi kadr yoki matn ham yuborishingiz mumkin.',
+          { parse_mode: 'HTML' }
+        );
+        await sendAmbiguousCandidateResults(ctx, amb);
+        return;
+      }
+
       const llmRejected =
         photoFail && !photoFail.ok && photoFail.reason === 'llm_verify_failed';
       let body = llmRejected

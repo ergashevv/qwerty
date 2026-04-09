@@ -16,7 +16,8 @@ export interface MovieIdentified {
 /** Rasm bo‘yicha aniqlash: topilmadi — yoki nomzod bor lekin LLM tasdiqidan o‘tmadi */
 export type IdentifyMovieResult =
   | { ok: true; identified: MovieIdentified }
-  | { ok: false; reason: 'no_candidates' | 'llm_verify_failed' };
+  | { ok: false; reason: 'no_candidates' }
+  | { ok: false; reason: 'llm_verify_failed'; candidates: MovieIdentified[] };
 
 export interface MovieDetails {
   title: string;
@@ -1133,8 +1134,19 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
     console.log('⚠️ Tasdiq uchun nomzod yo‘q');
     return { ok: false, reason: 'no_candidates' };
   }
-  console.log('⚠️ Hech bir nomzod LLM tasdiqidan o\'tmadi');
-  return { ok: false, reason: 'llm_verify_failed' };
+  const ambiguousList: MovieIdentified[] = [];
+  for (const c of ordered) {
+    pushDistinct(ambiguousList, c);
+  }
+  if (lastAlternative) {
+    pushDistinct(ambiguousList, lastAlternative);
+  }
+  console.log('⚠️ Hech bir nomzod LLM tasdiqidan o\'tmadi — foydalanuvchiga nomzodlar:', ambiguousList.map((x) => x.title).join(', '));
+  return {
+    ok: false,
+    reason: 'llm_verify_failed',
+    candidates: ambiguousList.slice(0, 5),
+  };
 }
 
 /**
