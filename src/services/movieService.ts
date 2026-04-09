@@ -284,6 +284,18 @@ function varietyTalkShowPenaltyPopularity(m: TmdbResult): number {
   return 0;
 }
 
+function isLikelyVarietyTalkTitle(title: string): boolean {
+  return /\b(saturday night live|\bsnl\b|the daily show|late night with|late show with|tonight show|jimmy kimmel|conan\b|last week tonight|the colbert report|real time with|meet the press|today show|ellen degeneres show|graham norton show|scene of the crime)\b/i.test(
+    title
+  );
+}
+
+function prioritizeNarrativeCandidates(list: TmdbResult[]): TmdbResult[] {
+  if (list.length === 0) return list;
+  const nonVariety = list.filter((m) => !isLikelyVarietyTalkTitle((m.title || m.name || '').trim()));
+  return nonVariety.length > 0 ? nonVariety : list;
+}
+
 /** Yuz → TMDB credits: mashhurlik + film > TV (yaxshilangan tartib) */
 function sortTmdbByFaceCredits(a: TmdbResult, b: TmdbResult): number {
   const pa = Math.max(0, (a.popularity ?? 0) - varietyTalkShowPenaltyPopularity(a));
@@ -595,7 +607,7 @@ async function identifyByFaces(base64: string): Promise<MovieIdentified | null> 
     );
     const kpCandidates = kpFilmSets[0];
     if (kpCandidates.length > 0) {
-      const sortedKp = kpCandidates.sort(sortTmdbByRelevance).slice(0, FACE_CANDIDATE_LIMIT);
+      const sortedKp = prioritizeNarrativeCandidates(kpCandidates).sort(sortTmdbByFaceCredits).slice(0, FACE_CANDIDATE_LIMIT);
       const names = celebrities.map(c => c.name).join(', ');
       const titles = sortedKp.map(c => c.title || c.name).join(' | ');
       console.log(`\u{1F3AC} Kinopoisk person fallback candidates: ${titles}`);
@@ -621,7 +633,7 @@ async function identifyByFaces(base64: string): Promise<MovieIdentified | null> 
     if (intersection.length > 0) candidates = intersection;
   }
 
-  candidates = candidates.sort(sortTmdbByRelevance).slice(0, FACE_CANDIDATE_LIMIT);
+  candidates = prioritizeNarrativeCandidates(candidates).sort(sortTmdbByFaceCredits).slice(0, FACE_CANDIDATE_LIMIT);
   console.log('🎬 Candidates:', candidates.map(c => c.title || c.name).join(', '));
 
   // Bitta qolsa — aniq
@@ -653,17 +665,21 @@ async function identifyByFaces(base64: string): Promise<MovieIdentified | null> 
 
 async function llmPickFromCandidates(base64: string, actors: string, candidates: string): Promise<MovieIdentified | null> {
   if (!AI_LLM_ENABLED) return null;
+  const candidateTitles = candidates
+    .split('|')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (candidateTitles.length === 0) return null;
   const userPrompt = `Recognized actors: ${actors}
-Candidate movies/shows (pick exactly ONE from this list): ${candidates}
+Candidate movies/shows: ${candidates}
 
-Look at the screenshot carefully. Based on the scene details (costumes, setting, lighting, props, visible text in the film frame), which ONE of the candidates does this screenshot belong to?
+Look at the screenshot carefully. Based on scene details (costumes, setting, lighting, props, visible text in the film frame), choose the best candidate ONLY if it is genuinely plausible.
 
 IMPORTANT RULES:
-1. You MUST pick from the candidates list ONLY — do NOT suggest any title outside this list.
-2. These actors were identified with high confidence by face recognition — the film is almost certainly in this list.
-3. If you are uncertain between two, pick the one whose visual context (style, setting, tone) best matches.
-4. Use "medium" confidence if you are not fully sure — but still pick the best match from the list.
-5. Only use confidence "low" with empty title if the image has NO connection to any candidate (e.g. it is clearly a non-film image like a real-life photo or meme).
+1. Use ONLY titles from the candidates list. Do NOT invent outside titles.
+2. If candidates are mostly talk-show/variety entries but the frame looks like a narrative film scene, set confidence to "low" and title to empty.
+3. Use "high" or "medium" only when the chosen candidate is visually consistent with the frame.
+4. If uncertain or generic frame with no clear match, return low confidence with empty title.
 
 Respond ONLY with JSON:
 {"title": "Exact title from candidates", "type": "movie" or "tv", "confidence": "high/medium/low"}`;
@@ -673,9 +689,10 @@ Respond ONLY with JSON:
     if (!m) return null;
     const parsed = JSON.parse(m[0]) as { title?: string; type?: string; confidence?: string };
     const t = (parsed.title || '').trim();
-    if (!t) return null;
     const conf = (parsed.confidence || '').toLowerCase();
-    if (conf === 'low') return null;
+    if (!t || t.toLowerCase() === 'unknown' || conf === 'low') return null;
+    const inCandidates = candidateTitles.some((ct) => titlesMatch(ct, t));
+    if (!inCandidates) return null;
     return {
       title: t,
       type: parsed.type === 'tv' ? 'tv' : 'movie',
