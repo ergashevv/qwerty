@@ -13,10 +13,10 @@ export interface MovieIdentified {
   confidence?: string;
 }
 
-/** Rasm bo‘yicha aniqlash: topilmadi — yoki nomzod bor lekin Gemini verify rad etdi */
+/** Rasm bo‘yicha aniqlash: topilmadi — yoki nomzod bor lekin LLM tasdiqidan o‘tmadi */
 export type IdentifyMovieResult =
   | { ok: true; identified: MovieIdentified }
-  | { ok: false; reason: 'no_candidates' | 'gemini_verify_failed' };
+  | { ok: false; reason: 'no_candidates' | 'llm_verify_failed' };
 
 export interface MovieDetails {
   title: string;
@@ -50,14 +50,20 @@ export interface WatchLink {
 const TMDB_KEY   = process.env.TMDB_API_KEY   || '';
 const OMDB_KEY   = process.env.OMDB_API_KEY   || '';
 const IMGBB_KEY  = process.env.IMGBB_API_KEY   || '';
-/** Barcha LLM: faqat Azure OpenAI (GEMINI / Google generative olib tashlangan). */
+/** Barcha LLM: faqat Azure OpenAI */
 const AI_LLM_ENABLED = isAzureLlmConfigured();
 const KP_KEY     = process.env.KINOPOISK_API_KEY || '';
 const KP_BASE    = 'https://kinopoiskapiunofficial.tech';
-/** Tasdiq bosqichi: har bir nomzod uchun alohida multimodal chaqiruv — token sarfi shu yerda ko‘payadi */
-const MAX_VERIFY = Math.min(8, Math.max(1, parseInt(process.env.GEMINI_MAX_VERIFY || '4', 10)));
-/** Uzoq kenglikdagi screenshotlar uchun Gemini/Vision tokenini kesish (sahna tanib olish uchun 1280 yetarli) */
-const AI_IMAGE_MAX_EDGE = Math.min(2048, Math.max(768, parseInt(process.env.GEMINI_IMAGE_MAX_EDGE || '1280', 10)));
+/** Tasdiq bosqichi: har bir nomzod uchun alohida multimodal chaqiruv */
+const MAX_VERIFY = Math.min(
+  8,
+  Math.max(1, parseInt(process.env.LLM_MAX_VERIFY || process.env.GEMINI_MAX_VERIFY || '4', 10))
+);
+/** Rasm uzun tomoni (px) — token tejash */
+const AI_IMAGE_MAX_EDGE = Math.min(
+  2048,
+  Math.max(768, parseInt(process.env.LLM_IMAGE_MAX_EDGE || process.env.GEMINI_IMAGE_MAX_EDGE || '1280', 10))
+);
 /** Instagram @username analytics — faqat UI o‘qish, kichik rasm yetarli */
 const INSTAGRAM_EXTRACT_MAX_EDGE = Math.min(1280, Math.max(480, parseInt(process.env.INSTAGRAM_EXTRACT_MAX_EDGE || '720', 10)));
 const TIMEOUT    = 8000;
@@ -198,7 +204,7 @@ export function cacheEntryMatchesIdentified(
 
 /**
  * Havola topilmagan filmlar uchun sentinel: {"empty":true,"at":UNIX_TS}.
- * 24 soat ichida qayta qidirmaslik — Brave / qidiruv limitini tejaydi.
+ * 24 soat ichida qayta qidirmaslik — cache / SearXNG yukini tejaydi.
  */
 const EMPTY_LINKS_COOLDOWN = 24 * 60 * 60;
 
@@ -265,7 +271,32 @@ function sortTmdbByRelevance(a: TmdbResult, b: TmdbResult): number {
   return (b.vote_count ?? 0) - (a.vote_count ?? 0);
 }
 
-/** Yuz → TMDB: kesishuvdan keyin Gemini tanlaydigan nomzodlar soni (oldingi 5 — juda tor) */
+/** Talk/variety — bir necha mehmon qism; narrative film kadrlari bilan adashadi. Popularity pastlashtiriladi. */
+function varietyTalkShowPenaltyPopularity(m: TmdbResult): number {
+  const t = (m.title || m.name || '').toLowerCase();
+  if (
+    /\b(saturday night live|\bsnl\b|the daily show|late night with|late show with|tonight show|jimmy kimmel|conan\b|last week tonight|the colbert report|real time with|meet the press|today show)\b/i.test(
+      t
+    )
+  ) {
+    return 22;
+  }
+  return 0;
+}
+
+/** Yuz → TMDB credits: mashhurlik + film > TV (yaxshilangan tartib) */
+function sortTmdbByFaceCredits(a: TmdbResult, b: TmdbResult): number {
+  const pa = Math.max(0, (a.popularity ?? 0) - varietyTalkShowPenaltyPopularity(a));
+  const pb = Math.max(0, (b.popularity ?? 0) - varietyTalkShowPenaltyPopularity(b));
+  if (Math.abs(pa - pb) > 0.15) return pb - pa;
+  if (a.media_type !== b.media_type) {
+    if (a.media_type === 'movie' && b.media_type === 'tv') return -1;
+    if (a.media_type === 'tv' && b.media_type === 'movie') return 1;
+  }
+  return sortTmdbByRelevance(a, b);
+}
+
+/** Yuz → TMDB: kesishuvdan keyin LLM tanlaydigan nomzodlar soni */
 const FACE_CANDIDATE_LIMIT = 20;
 /** Bitta aktyor uchun TMDB dan olinadigan maksimal film (30 — pastda qolgan mashhur dramalar) */
 const PERSON_CREDITS_MAX = 60;
@@ -325,7 +356,7 @@ async function tmdbPersonMovies(personName: string): Promise<TmdbResult[]> {
         // Kamida 10 ta ovoz — SNG/CIS (qozoq, turk, o'zbek) filmlar ham o'tishi uchun pastlatildi
         (m.vote_count ?? 0) >= 10
       )
-      .sort(sortTmdbByRelevance)
+      .sort(sortTmdbByFaceCredits)
       .slice(0, PERSON_CREDITS_MAX);
   } catch { return []; }
 }
@@ -375,18 +406,9 @@ async function omdbById(imdbId: string): Promise<{ title: string; type: MediaTyp
   return null;
 }
 
-// ─── BING / SEARXNG / BRAVE (matn qidiruv — Google CSE olib tashlangan) ─────
+// ─── VEB IZ (faqat SearXNG — o‘z VPS) ────────────────────────────────────────
 
-interface SerperResult { title: string; link: string; snippet?: string; }
-
-const BRAVE_KEY = process.env.BRAVE_SEARCH_API_KEY || '';
-/** Microsoft Bing: Web Search v7 yoki Custom Search — bir xil subscription kaliti */
-const BING_KEY = process.env.BING_SEARCH_API_KEY || '';
-/**
- * Bing Custom Search — `customconfig` parametri (customsearch.ai → instance → Production → Custom Configuration ID).
- * Bo‘sh bo‘lsa faqat umumiy Web Search ishlatiladi.
- */
-const BING_CUSTOM_CONFIG = process.env.BING_CUSTOMSEARCH_CONFIG_ID?.trim() || '';
+interface WebSearchSnippet { title: string; link: string; snippet?: string; }
 
 function searxngBaseUrl(): string | null {
   const raw = process.env.SEARXNG_URL?.trim();
@@ -398,7 +420,7 @@ function searxngBaseUrl(): string | null {
  * SearXNG (ochiq kod, odatda o'z serveringiz) — JSON API.
  * @see https://docs.searxng.org/dev/search_api.html
  */
-async function searxngSearch(query: string): Promise<SerperResult[]> {
+async function searxngSearch(query: string): Promise<WebSearchSnippet[]> {
   const base = searxngBaseUrl();
   if (!base) return [];
   try {
@@ -428,104 +450,16 @@ async function searxngSearch(query: string): Promise<SerperResult[]> {
   }
 }
 
-function mapBingWebPages(values: unknown): SerperResult[] {
-  if (!Array.isArray(values)) return [];
-  return values
-    .map((item: { name?: string; url?: string; snippet?: string }) => ({
-      title: String(item.name ?? '').trim(),
-      link: String(item.url ?? '').trim(),
-      snippet: String(item.snippet ?? '').trim(),
-    }))
-    .filter((x) => x.link.length > 0 && /^https?:\/\//i.test(x.link));
-}
-
-/** Bing Custom Search API v7 — Azure’dagi Custom / Grounding Custom kaliti bilan */
-async function bingCustomWebSearch(query: string): Promise<SerperResult[]> {
-  if (!BING_KEY || !BING_CUSTOM_CONFIG) return [];
-  try {
-    const r = await axios.get('https://api.bing.microsoft.com/v7.0/custom/search', {
-      params: {
-        q: query,
-        customconfig: BING_CUSTOM_CONFIG,
-        count: 10,
-        safeSearch: 'Moderate',
-      },
-      headers: { 'Ocp-Apim-Subscription-Key': BING_KEY },
-      timeout: TIMEOUT,
-      validateStatus: (s) => s === 200,
-    });
-    return mapBingWebPages(r.data?.webPages?.value);
-  } catch (e) {
-    console.warn('Bing Custom Search xato:', (e as Error).message?.slice(0, 80));
-    return [];
-  }
-}
-
-/** Bing Web Search API v7 — umumiy veb qidiruv */
-async function bingWebSearch(query: string): Promise<SerperResult[]> {
-  if (!BING_KEY) return [];
-  try {
-    const r = await axios.get('https://api.bing.microsoft.com/v7.0/search', {
-      params: { q: query, count: 10, safeSearch: 'Moderate' },
-      headers: { 'Ocp-Apim-Subscription-Key': BING_KEY },
-      timeout: TIMEOUT,
-      validateStatus: (s) => s === 200,
-    });
-    return mapBingWebPages(r.data?.webPages?.value);
-  } catch (e) {
-    console.warn('Bing Search xato:', (e as Error).message?.slice(0, 80));
-    return [];
-  }
-}
-
-/** Brave Search API — Bing / SearXNG dan keyin fallback */
-async function braveSearch(query: string): Promise<SerperResult[]> {
-  if (!BRAVE_KEY) return [];
-  try {
-    const r = await axios.get('https://api.search.brave.com/res/v1/web/search', {
-      params: { q: query, count: 10 },
-      headers: { 'X-Subscription-Token': BRAVE_KEY, 'Accept': 'application/json' },
-      timeout: TIMEOUT,
-    });
-    return (r.data.web?.results || []).map((item: { title: string; url: string; description?: string }) => ({
-      title: item.title || '',
-      link: item.url || '',
-      snippet: item.description || '',
-    }));
-  } catch (e) {
-    console.warn('Brave Search xato:', (e as Error).message?.slice(0, 80));
-    return [];
-  }
-}
-
-/**
- * Veb qidiruv: SearXNG (o‘z VPS — tekin) → Bing Custom → Bing Web → Brave.
- */
-async function serperSearch(query: string, _gl = 'uz', _hl = 'uz'): Promise<SerperResult[]> {
+/** Veb fragmentlar — faqat `SEARXNG_URL` (o‘z instansingiz). Boshqa provayderlar yo‘q. */
+async function webSearch(query: string, _gl = 'uz', _hl = 'uz'): Promise<WebSearchSnippet[]> {
   const q = query.slice(0, 40);
   const sx = await searxngSearch(query);
   if (sx.length > 0) {
     console.log(`🌐 SearXNG: "${q}" (${sx.length} natija)`);
     return sx;
   }
-  if (BING_CUSTOM_CONFIG) {
-    const custom = await bingCustomWebSearch(query);
-    if (custom.length > 0) {
-      console.log(`🔎 Bing Custom: "${q}" (${custom.length} natija)`);
-      return custom;
-    }
-  }
-  const bing = await bingWebSearch(query);
-  if (bing.length > 0) {
-    console.log(`🔎 Bing: "${q}" (${bing.length} natija)`);
-    return bing;
-  }
   if (searxngBaseUrl()) {
-    console.log(`🌐 SearXNG bo'sh — Bing/Brave: "${q}"`);
-  }
-  if (BRAVE_KEY) {
-    console.log(`🦁 Brave: "${q}"`);
-    return braveSearch(query);
+    console.log(`🌐 SearXNG bo'sh yoki sozlanmagan: "${q}"`);
   }
   return [];
 }
@@ -670,7 +604,7 @@ async function identifyByFaces(base64: string): Promise<MovieIdentified | null> 
         return { title: c.title || c.name || '', type: (c.media_type === 'tv' ? 'tv' : 'movie') as MediaType, confidence: 'medium' };
       }
       if (AI_LLM_ENABLED) {
-        const pickG = await geminiPickFromCandidates(base64, names, titles);
+        const pickG = await llmPickFromCandidates(base64, names, titles);
         if (pickG) return pickG;
       }
     }
@@ -698,11 +632,11 @@ async function identifyByFaces(base64: string): Promise<MovieIdentified | null> 
     return { title, type, confidence: 'high' };
   }
 
-  // Ko'p nomzod: Gemini tanlaydi; topilmasa — TMDB reytingi bo'yicha fallback
+  // Ko'p nomzod: LLM tanlaydi; topilmasa — TMDB reytingi bo'yicha fallback
   if (candidates.length > 1 && AI_LLM_ENABLED) {
     const names = celebrities.map(c => c.name).join(', ');
     const titles = candidates.map(c => c.title || c.name).join(' | ');
-    const pickG = await geminiPickFromCandidates(base64, names, titles);
+    const pickG = await llmPickFromCandidates(base64, names, titles);
     if (pickG) return pickG;
   }
   if (candidates.length > 1) {
@@ -717,7 +651,7 @@ async function identifyByFaces(base64: string): Promise<MovieIdentified | null> 
   return null;
 }
 
-async function geminiPickFromCandidates(base64: string, actors: string, candidates: string): Promise<MovieIdentified | null> {
+async function llmPickFromCandidates(base64: string, actors: string, candidates: string): Promise<MovieIdentified | null> {
   if (!AI_LLM_ENABLED) return null;
   const userPrompt = `Recognized actors: ${actors}
 Candidate movies/shows (pick exactly ONE from this list): ${candidates}
@@ -734,7 +668,7 @@ IMPORTANT RULES:
 Respond ONLY with JSON:
 {"title": "Exact title from candidates", "type": "movie" or "tv", "confidence": "high/medium/low"}`;
   try {
-    const text = await azureChatVision('geminiPickFromCandidates', base64, 'image/jpeg', userPrompt);
+    const text = await azureChatVision('llmPickFromCandidates', base64, 'image/jpeg', userPrompt);
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return null;
     const parsed = JSON.parse(m[0]) as { title?: string; type?: string; confidence?: string };
@@ -750,9 +684,9 @@ Respond ONLY with JSON:
   } catch { return null; }
 }
 
-// ─── GEMINI CROSS-CHECK ───────────────────────────────────────────────────────
+// ─── LLM KADR ANALIZI (Azure vision) ─────────────────────────────────────────
 
-async function identifyByGemini(base64: string, textHint?: string | null): Promise<MovieIdentified | null> {
+async function identifyByVisionLlm(base64: string, textHint?: string | null): Promise<MovieIdentified | null> {
   if (!AI_LLM_ENABLED) return null;
   try {
     const hintLine = textHint
@@ -777,7 +711,7 @@ Rules:
 - Use confidence "high" or "medium" only if you genuinely recognize this specific film.
 - Use "unknown" + "low" if you cannot identify the specific title (not just the genre/region).
 - Do NOT guess a title just because it fits the genre — only respond with a title you actually recognize.`;
-    const text = await azureChatVision('identifyByGemini', base64, 'image/jpeg', userPrompt);
+    const text = await azureChatVision('identifyByVisionLlm', base64, 'image/jpeg', userPrompt);
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return null;
     const parsed = JSON.parse(m[0]) as { title?: string; type?: string; confidence?: string };
@@ -797,7 +731,7 @@ Rules:
 // ─── SMART CROP (watermark/UI olib tashlash) ─────────────────────────────────
 
 /**
- * Gemini/Vision/Rekognition uchun: juda katta JPEG larni token va hisobni tejash uchun
+ * Vision LLM / Rekognition uchun: juda katta JPEG larni token tejash uchun
  * uzun tomoni AI_IMAGE_MAX_EDGE dan oshmasin (sifat — kadr tuzilishi/yuzlar uchun odatda yetarli).
  */
 async function downscaleForAiPipeline(base64: string): Promise<string> {
@@ -868,35 +802,35 @@ async function cropFrame(base64: string): Promise<string> {
   } catch { return base64; }
 }
 
-// ─── GEMINI BILAN TASDIQLASH ─────────────────────────────────────────────────
+// ─── LLM BILAN TASDIQLASH ────────────────────────────────────────────────────
 
 /** Faqat aniq "match": true bo'lsa true — taxminni rad etish uchun "fail-closed". */
 interface VerifyResult {
   match: boolean;
-  /** Verify false bo'lsa lekin Gemini boshqa aniq sarlavha bilsa — shu yerda qaytariladi */
+  /** Verify false bo'lsa lekin LLM boshqa aniq sarlavha bilsa */
   alternativeTitle?: string;
   alternativeType?: MediaType;
 }
 
-async function geminiVerify(base64: string, candidateTitle: string, mimeType: string): Promise<VerifyResult> {
+async function llmVerifyCandidate(base64: string, candidateTitle: string, mimeType: string): Promise<VerifyResult> {
   if (!AI_LLM_ENABLED) return { match: false };
-  const userPrompt = `Does this screenshot clearly belong to the movie/TV show "${candidateTitle}"?
+  const userPrompt = `Does this screenshot belong to the movie/TV show "${candidateTitle}"? (single-frame identification — lean practical, not courtroom certainty.)
 
 CRITICAL RULES:
-1. IGNORE watermarks and overlaid text (TASAVVUR, CINEMASCENEUZ, channel logos, player UI, timestamps)
-2. IGNORE social media interface around the video
-3. Focus on the actual film scene: faces, costumes, setting, lighting, animation vs live-action
-4. If "${candidateTitle}" is a documentary / behind-the-scenes / book about cinema (not a narrative film), answer false
-5. Answer true ONLY if you are confident this frame is from "${candidateTitle}" — not from a similar title, sequel, or different film with the same actor
-6. Answer false if: image quality is too poor, scene could plausibly be from several different films, wrong medium (e.g. cartoon vs live-action), or you have meaningful doubt
-7. If match is false but you are CONFIDENT you know the EXACT correct title, fill in "alternativeTitle" and "alternativeType". Only fill these if you are certain — leave empty strings if unsure.
+1. IGNORE watermarks, channel logos, player UI, timestamps, and social media chrome around the video
+2. Focus on the actual scene: faces, costumes, setting, lighting, live-action vs animation
+3. If "${candidateTitle}" is ONLY a documentary / clip show ABOUT cinema (not the narrative work), answer false
+4. Answer true if the frame is CONSISTENT with "${candidateTitle}" and you see nothing that clearly contradicts it (same actor present is a strong signal when it matches that work)
+5. Answer false only when you are fairly sure it is a different title, wrong medium, or the setting/era clearly conflicts
+6. Do not require "100% proof" from one still — memorable films often have generic-looking rooms; if it plausibly fits "${candidateTitle}", prefer true
+7. If match is false but you KNOW the exact correct title, set "alternativeTitle" / "alternativeType"; otherwise empty strings
 
 Answer ONLY with JSON:
 {"match": true} 
 or
 {"match": false, "reason": "brief explanation", "alternativeTitle": "Exact title or empty string", "alternativeType": "movie or tv or empty string"}`;
   try {
-    const text = await azureChatVision('geminiVerify', base64, mimeType, userPrompt);
+    const text = await azureChatVision('llmVerifyCandidate', base64, mimeType, userPrompt);
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return { match: false };
     const parsed = JSON.parse(m[0]) as {
@@ -931,7 +865,7 @@ function pushDistinct(candidates: MovieIdentified[], m: MovieIdentified | null |
  * Rasm bo'yicha film: Azure OpenAI multimodal LLM + AWS Rekognition / tasdiq.
  */
 export async function identifyMovie(base64: string, mimeType: string, textHint?: string | null): Promise<IdentifyMovieResult> {
-  const withTimeout = <T>(p: Promise<T>, ms = 10000): Promise<T | null> =>
+  const withTimeout = <T>(p: Promise<T>, ms = 24000): Promise<T | null> =>
     Promise.race([p, new Promise<null>(res => setTimeout(() => res(null), ms))]).catch(() => null);
 
   if (!AI_LLM_ENABLED) {
@@ -943,15 +877,15 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
   const aiBase64 = await downscaleForAiPipeline(croppedBase64);
   const cropMime = 'image/jpeg';
 
-  const [faces, gemini] = await Promise.all([
+  const [faces, visionLlm] = await Promise.all([
     withTimeout(identifyByFaces(aiBase64), 25000),
-    withTimeout(identifyByGemini(aiBase64, textHint)),
+    withTimeout(identifyByVisionLlm(aiBase64, textHint)),
   ]);
 
-  console.log(`Pass1 — Faces: ${faces?.title || '-'}, LLM: ${gemini?.title || '-'}`);
+  console.log(`Pass1 — Faces: ${faces?.title || '-'}, LLM: ${visionLlm?.title || '-'}`);
 
   const ordered: MovieIdentified[] = [];
-  const pass1 = [faces, gemini].filter(Boolean) as MovieIdentified[];
+  const pass1 = [faces, visionLlm].filter(Boolean) as MovieIdentified[];
 
   for (let i = 0; i < pass1.length; i++) {
     for (let j = i + 1; j < pass1.length; j++) {
@@ -966,8 +900,8 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
     pushDistinct(ordered, faces);
   }
 
-  if (gemini && gemini.confidence !== 'low') {
-    pushDistinct(ordered, gemini);
+  if (visionLlm && visionLlm.confidence !== 'low') {
+    pushDistinct(ordered, visionLlm);
   }
 
   if (faces?.confidence === 'medium') {
@@ -976,8 +910,8 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
 
   if (ordered.length === 0) {
     pushDistinct(ordered, faces);
-    if (gemini && gemini.confidence !== 'low') {
-      pushDistinct(ordered, gemini);
+    if (visionLlm && visionLlm.confidence !== 'low') {
+      pushDistinct(ordered, visionLlm);
     }
   }
 
@@ -986,16 +920,16 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
   /** Yuz + LLM bir xil — aktyor va sahna mos */
   if (
     faces?.title &&
-    gemini?.title &&
-    gemini.confidence !== 'low' &&
-    titlesMatch(faces.title, gemini.title)
+    visionLlm?.title &&
+    visionLlm.confidence !== 'low' &&
+    titlesMatch(faces.title, visionLlm.title)
   ) {
     const consensus: MovieIdentified = {
       title: faces.title,
-      type: faces.type ?? gemini.type,
-      confidence: gemini.confidence ?? faces.confidence,
+      type: faces.type ?? visionLlm.type,
+      confidence: visionLlm.confidence ?? faces.confidence,
     };
-    console.log('✅ faces+gemini konsensus — Gemini verify o‘tkazilmaydi:', consensus.title);
+    console.log('✅ faces+LLM konsensus — alohida tasdiq o‘tkazilmaydi:', consensus.title);
     return { ok: true, identified: consensus };
   }
 
@@ -1005,23 +939,23 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
   for (let i = 0; i < Math.min(ordered.length, MAX_VERIFY); i++) {
     verifyRan = true;
     const cand = ordered[i];
-    const verifyRes = await withTimeout(geminiVerify(aiBase64, cand.title, cropMime));
+    const verifyRes = await withTimeout(llmVerifyCandidate(aiBase64, cand.title, cropMime), 28000);
     if (verifyRes?.match) {
       console.log('✅ Tasdiqlangan:', cand.title);
       return { ok: true, identified: cand };
     }
-    // Verify false bo'lsa lekin Gemini aniq alternativ sarlavha bilsa — saqlab qo'yamiz
+    // Verify false bo'lsa lekin LLM aniq alternativ sarlavha bilsa — saqlab qo'yamiz
     if (verifyRes?.alternativeTitle && !lastAlternative) {
       lastAlternative = { title: verifyRes.alternativeTitle, type: verifyRes.alternativeType ?? cand.type };
       console.log('💡 LLM alternativ taklif:', lastAlternative.title);
     }
   }
 
-  // Hech bir nomzod tasdiqlanmadi, lekin Gemini alternativ taklif bilsa —
+  // Hech bir nomzod tasdiqlanmadi, lekin LLM alternativ taklif bilsa —
   // uni ham verify dan o'tkazamiz (tasdiqsiz qaytarmaslik uchun)
   if (lastAlternative) {
     verifyRan = true;
-    const altVerify = await withTimeout(geminiVerify(aiBase64, lastAlternative.title, cropMime));
+    const altVerify = await withTimeout(llmVerifyCandidate(aiBase64, lastAlternative.title, cropMime), 28000);
     if (altVerify?.match) {
       console.log('✅ Alternativ sarlavha tasdiqlandi:', lastAlternative.title);
       return { ok: true, identified: lastAlternative };
@@ -1034,7 +968,7 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
     return { ok: false, reason: 'no_candidates' };
   }
   console.log('⚠️ Hech bir nomzod LLM tasdiqidan o\'tmadi');
-  return { ok: false, reason: 'gemini_verify_failed' };
+  return { ok: false, reason: 'llm_verify_failed' };
 }
 
 /**
@@ -1119,11 +1053,11 @@ Answer ONLY "yes" or "no".`;
   }
 }
 
-async function identifyBySerper(query: string): Promise<MovieIdentified | null> {
+async function identifyByWebSearch(query: string): Promise<MovieIdentified | null> {
   // Birinchi inglizcha qidiruv, keyin rus tilidagi (SNG filmlar uchun)
   const [enResults, ruResults] = await Promise.all([
-    serperSearch(`${query} movie imdb`),
-    serperSearch(`${query} фильм imdb`, 'ru', 'ru'),
+    webSearch(`${query} movie imdb`),
+    webSearch(`${query} фильм imdb`, 'ru', 'ru'),
   ]);
   for (const res of [...enResults, ...ruResults]) {
     const m = res.link.match(/imdb\.com\/title\/(tt\d+)/);
@@ -1177,11 +1111,11 @@ export async function identifyFromTextDetailed(query: string): Promise<IdentifyF
     return found({ title: 'WALL-E', type: 'movie' });
   }
 
-  // 2b. Veb qidiruv (Brave) — faqat so‘rov film sarlavhasiga o‘xshaganda (matn bilan titlesMatch)
-  const serper = await identifyBySerper(query);
-  if (serper) {
-    console.log(`🔍 Text identification (web): "${query}" -> Found "${serper.title}"`);
-    return found(serper);
+  // 2b. Veb qidiruv (SearXNG) — faqat so‘rov film sarlavhasiga o‘xshaganda
+  const webHit = await identifyByWebSearch(query);
+  if (webHit) {
+    console.log(`🔍 Text identification (web): "${query}" -> Found "${webHit.title}"`);
+    return found(webHit);
   }
 
 
@@ -1207,7 +1141,7 @@ export async function identifyFromTextDetailed(query: string): Promise<IdentifyF
   // 3. Veb qidiruv konteksti + LLM — uzun tavsiflar
   if (!AI_LLM_ENABLED) return notFound();
 
-  const contextResults = await serperSearch(`${query} qaysi film kino`, 'uz', 'uz');
+  const contextResults = await webSearch(`${query} qaysi film kino`, 'uz', 'uz');
   const snippets =
     contextResults.length > 0
       ? contextResults.slice(0, 3).map(r => `${r.title}: ${r.snippet}`).join('\n\n')
@@ -1268,10 +1202,10 @@ Respond ONLY with this JSON structure:
 
       if (!verifiedTitle) {
         console.log(`🔍 LLM title verification (web): "${p.title}"`);
-        const serperVerify = await identifyBySerper(p.title);
-        if (serperVerify) {
-          verifiedTitle = serperVerify.title;
-          verifiedType = serperVerify.type;
+        const webVerify = await identifyByWebSearch(p.title);
+        if (webVerify) {
+          verifiedTitle = webVerify.title;
+          verifiedType = webVerify.type;
         }
       }
 
@@ -1441,7 +1375,7 @@ function isAllowedWatchUrl(url: string, title?: string): boolean {
  * O‘zbekcha tarjima nomi (masalan "Yettinchi farzand") bilan qidiruv bo‘sh chiqishi mumkin.
  */
 function isLinkRelevantToMovie(
-  result: SerperResult,
+  result: WebSearchSnippet,
   allTitles: string[],
   year: string,
   imdbId?: string | null,
@@ -1504,7 +1438,7 @@ function isLinkRelevantToMovie(
 }
 
 function collectWatchLinksFromResults(
-  items: SerperResult[],
+  items: WebSearchSnippet[],
   seen: Set<string>,
   finalLinks: WatchLink[],
   allTitles: string[],
@@ -1533,8 +1467,8 @@ function collectWatchLinksFromResults(
 
 /** Qat'iy filtr hech narsa qoldirmasa: qidiruv natijasidagi birinchi ruxsat etilgan havolalar (kinopoisk/ru odatda lotin sarlavha bermaydi). */
 function relaxedFillFromResults(
-  uzResults: SerperResult[],
-  ruResults: SerperResult[],
+  uzResults: WebSearchSnippet[],
+  ruResults: WebSearchSnippet[],
   seen: Set<string>,
   finalLinks: WatchLink[],
 ): void {
@@ -1577,14 +1511,14 @@ export async function findWatchLinks(
 
   if (linkLocale === 'en') {
     const q1 = year ? `${primary} ${year} watch online streaming` : `${primary} watch online streaming`;
-    const r1 = await serperSearch(q1, 'us', 'en');
+    const r1 = await webSearch(q1, 'us', 'en');
     collectWatchLinksFromResults(r1, seen, finalLinks, allTitles, year, imdbId, 'en', false, 5);
     if (finalLinks.length < 2) {
-      const r2 = await serperSearch(`${primary} stream online Netflix Prime Video`, 'us', 'en');
+      const r2 = await webSearch(`${primary} stream online Netflix Prime Video`, 'us', 'en');
       collectWatchLinksFromResults(r2, seen, finalLinks, allTitles, year, imdbId, 'en2', false, 4);
     }
     if (finalLinks.length === 0 && tt) {
-      const imdb = await serperSearch(`${tt} watch online`, 'us', 'en');
+      const imdb = await webSearch(`${tt} watch online`, 'us', 'en');
       collectWatchLinksFromResults(imdb, seen, finalLinks, allTitles, year, imdbId, 'imdb-en', false, 4);
     }
     if (finalLinks.length === 0) {
@@ -1595,14 +1529,14 @@ export async function findWatchLinks(
 
   if (linkLocale === 'ru') {
     const q1 = year ? `${primary} ${year} смотреть онлайн` : `${primary} смотреть онлайн бесплатно`;
-    const r1 = await serperSearch(q1, 'ru', 'ru');
+    const r1 = await webSearch(q1, 'ru', 'ru');
     collectWatchLinksFromResults(r1, seen, finalLinks, allTitles, year, imdbId, 'ru', true, 5);
     if (finalLinks.length < 2) {
-      const r2 = await serperSearch(`${primary} смотреть онлайн`, 'ru', 'ru');
+      const r2 = await webSearch(`${primary} смотреть онлайн`, 'ru', 'ru');
       collectWatchLinksFromResults(r2, seen, finalLinks, allTitles, year, imdbId, 'ru2', true, 4);
     }
     if (finalLinks.length === 0 && tt) {
-      const imdb = await serperSearch(`${tt} смотреть онлайн`, 'ru', 'ru');
+      const imdb = await webSearch(`${tt} смотреть онлайн`, 'ru', 'ru');
       collectWatchLinksFromResults(imdb, seen, finalLinks, allTitles, year, imdbId, 'imdb-ru', true, 4);
     }
     if (finalLinks.length === 0) {
@@ -1617,12 +1551,12 @@ export async function findWatchLinks(
     ? `${primary} ${year} uzbek o'zbek tilida`
     : `${primary} uzbek o'zbek tilida`;
 
-  const uzRes = await serperSearch(qUz, 'uz', 'uz');
+  const uzRes = await webSearch(qUz, 'uz', 'uz');
 
   // O'zbekcha nomda alohida qidiruv faqat agar nom juda farqli bo'lsa
-  let uzTitleRes: SerperResult[] = [];
+  let uzTitleRes: WebSearchSnippet[] = [];
   if (uz && uz.toLowerCase() !== primary.toLowerCase() && uz.length > 3) {
-    uzTitleRes = await serperSearch(`${uz} uzbek tilida`, 'uz', 'uz');
+    uzTitleRes = await webSearch(`${uz} uzbek tilida`, 'uz', 'uz');
   }
 
   collectWatchLinksFromResults(
@@ -1631,7 +1565,7 @@ export async function findWatchLinks(
 
   // ── Step 2: Rus qidiruv (faqat yetarli havola bo'lmasa) ─────────────────
   if (finalLinks.length < 2) {
-    const ruRes = await serperSearch(`${primary} смотреть онлайн`, 'ru', 'ru');
+    const ruRes = await webSearch(`${primary} смотреть онлайн`, 'ru', 'ru');
     for (const item of ruRes) {
       if (finalLinks.length >= 5) break;
       if (!isAllowedWatchUrl(item.link, item.title)) continue;
@@ -1645,7 +1579,7 @@ export async function findWatchLinks(
 
   // ── Step 3: IMDb ID bilan aniq qidiruv (hali ham bo'sh bo'lsa) ──────────
   if (finalLinks.length === 0 && tt) {
-    const imdbRes = await serperSearch(`${tt} o'zbek tilida смотреть`, 'uz', 'uz');
+    const imdbRes = await webSearch(`${tt} o'zbek tilida смотреть`, 'uz', 'uz');
     collectWatchLinksFromResults(imdbRes, seen, finalLinks, allTitles, year, imdbId, 'imdb', false, 3);
     if (finalLinks.length === 0) {
       relaxedFillFromResults(imdbRes, [], seen, finalLinks);
