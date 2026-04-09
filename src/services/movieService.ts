@@ -980,6 +980,31 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
     console.log('⚠️ Alternativ sarlavha ham tasdiqlanmadi:', lastAlternative.title);
   }
 
+  // GPT verify ba'zida juda konservativ bo'ladi; kuchli signal bo'lsa bo'sh qaytarmaymiz.
+  const top = ordered[0];
+  if (top) {
+    const facesStrong =
+      !!faces?.title && faces.confidence === 'high' && titlesMatch(faces.title, top.title);
+    const visionStrong =
+      !!visionLlm?.title && visionLlm.confidence === 'high' && titlesMatch(visionLlm.title, top.title);
+    const singleCandidate =
+      ordered.length === 1 &&
+      (faces?.confidence === 'high' || visionLlm?.confidence === 'high' || faces?.confidence === 'medium');
+
+    if (facesStrong || visionStrong || singleCandidate) {
+      console.log(
+        `✅ Soft fallback: verify rad etdi, lekin signal kuchli — "${top.title}" qaytarildi`
+      );
+      return {
+        ok: true,
+        identified: {
+          ...top,
+          confidence: top.confidence === 'high' ? 'high' : 'medium',
+        },
+      };
+    }
+  }
+
   if (!verifyRan) {
     console.log('⚠️ Tasdiq uchun nomzod yo‘q');
     return { ok: false, reason: 'no_candidates' };
