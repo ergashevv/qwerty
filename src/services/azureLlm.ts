@@ -8,7 +8,7 @@
  */
 
 import { AzureOpenAI, APIError } from 'openai';
-import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
+import type { ChatCompletion, ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { recordOpenAiChatUsage } from './geminiUsage';
 
 const MAX_CONCURRENT = Math.max(1, parseInt(process.env.AZURE_OPENAI_MAX_CONCURRENT || '8', 10));
@@ -69,9 +69,10 @@ function getRetryDelayMs(attempt: number): number {
 
 function logAzureFailure(operation: string, e: unknown): void {
   if (e instanceof APIError) {
+    const errBody: unknown = e.error;
     const detail =
-      typeof e.error === 'object' && e.error !== null
-        ? JSON.stringify(e.error).slice(0, 500)
+      typeof errBody === 'object' && errBody !== null
+        ? JSON.stringify(errBody).slice(0, 500)
         : '';
     console.warn(
       `Azure OpenAI xato [${operation}]: HTTP ${e.status} — ${e.message}${detail ? ` | ${detail}` : ''}`
@@ -158,7 +159,7 @@ export async function azureChatText(
   const client = clientForDeployment(deployment);
   const messages: ChatCompletionMessageParam[] = [{ role: 'user', content: userText }];
   try {
-    const res = await withAzureSlot(() =>
+    const res: ChatCompletion = await withAzureSlot(() =>
       client.chat.completions.create({
         model: deployment,
         messages,
@@ -200,7 +201,7 @@ export async function azureChatVision(
     },
   ];
   try {
-    const res = await withAzureSlot(() =>
+    const res: ChatCompletion = await withAzureSlot(() =>
       client.chat.completions.create({
         model: deployment,
         messages,

@@ -4,11 +4,11 @@ export interface GeminiUsageContextStore {
   telegramId: number;
 }
 
-const storage = new AsyncLocalStorage<GeminiUsageStore>();
-
 type GeminiUsageStore = GeminiUsageContextStore;
 
-/** Bot handler ichida bir marta — barcha ichki `movieService` Gemini chaqiruvlari userga bog‘lanadi */
+const storage = new AsyncLocalStorage<GeminiUsageStore>();
+
+/** Bot handler ichida bir marta — ichki LLM/Gemini chaqiruvlari userga bog‘lanadi */
 export function runWithGeminiUsageContext<T>(
   telegramId: number | undefined,
   fn: () => Promise<T>
