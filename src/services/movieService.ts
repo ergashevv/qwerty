@@ -346,6 +346,100 @@ export async function tmdbSearch(query: string, type: MediaType | 'multi' = 'mul
   } catch { return null; }
 }
 
+/** Bir xil nomli bir nechta film (masalan "War Machine" 2017 va 2026) poster/aktyor bo‘yicha ajratish */
+async function tmdbSearchMoviesList(query: string, limit = 15): Promise<TmdbResult[]> {
+  if (!TMDB_KEY) return [];
+  try {
+    const r = await axios.get('https://api.themoviedb.org/3/search/movie', {
+      params: { api_key: TMDB_KEY, query, language: 'en-US' },
+      timeout: TIMEOUT,
+    });
+    const results: TmdbResult[] = r.data.results || [];
+    return results.slice(0, limit);
+  } catch {
+    return [];
+  }
+}
+
+function normalizeActorRough(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function actorNamesRoughMatch(creditName: string, guess: string): boolean {
+  const a = normalizeActorRough(creditName);
+  const b = normalizeActorRough(guess);
+  if (!b || !a) return false;
+  if (a.includes(b) || b.includes(a)) return true;
+  const partsB = b.split(' ').filter((p) => p.length > 2);
+  if (partsB.length === 0) return false;
+  return partsB.every((p) => a.includes(p));
+}
+
+async function tmdbMovieTopCastIncludesActor(movieId: number, actorGuess: string): Promise<boolean> {
+  if (!TMDB_KEY) return false;
+  try {
+    const r = await axios.get(`https://api.themoviedb.org/3/movie/${movieId}/credits`, {
+      params: { api_key: TMDB_KEY },
+      timeout: TIMEOUT,
+    });
+    const cast = (r.data.cast || []).slice(0, 22) as Array<{ name?: string }>;
+    return cast.some((c) => c.name && actorNamesRoughMatch(c.name, actorGuess));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Vision poster sarlavhasi + ixtiyoriy billing (masalan "ALAN RITCHSON") bo‘yicha to‘g‘ri TMDB film sarlavhasi.
+ * Bir xil nomdagi eski filmlardan (Brad Pitt "War Machine") yangi Netflix nusxasini ajratadi.
+ */
+async function pickTmdbMovieForPosterTitle(
+  title: string,
+  mediaType: MediaType,
+  billingActor: string | undefined,
+  posterTitleReadable: boolean,
+): Promise<MovieIdentified | null> {
+  if (!TMDB_KEY || mediaType === 'tv') return null;
+  const list = await tmdbSearchMoviesList(title.trim(), 16);
+  if (list.length === 0) return null;
+
+  const titlePool = list.filter((m) => {
+    const nm = m.title || '';
+    return titlesMatchForSearchQuery(title, nm) || normalizeTitle(title) === normalizeTitle(nm);
+  });
+  const pool = titlePool.length > 0 ? titlePool : list;
+
+  const billing = (billingActor || '').trim();
+  if (billing.length > 2) {
+    let checked = 0;
+    for (const m of pool) {
+      if (!m.id || checked >= 6) break;
+      checked++;
+      if (await tmdbMovieTopCastIncludesActor(m.id, billing)) {
+        return { title: m.title || title, type: 'movie', confidence: 'high' };
+      }
+    }
+  }
+
+  const sorted = [...pool].sort((a, b) => {
+    const ya = parseInt((a.release_date || '').slice(0, 4), 10) || 0;
+    const yb = parseInt((b.release_date || '').slice(0, 4), 10) || 0;
+    if (posterTitleReadable || titlePool.length > 1) {
+      if (ya !== yb) return yb - ya;
+    }
+    return (b.popularity ?? 0) - (a.popularity ?? 0);
+  });
+  const best = sorted[0];
+  if (!best?.title) return null;
+  return { title: best.title, type: 'movie', confidence: posterTitleReadable ? 'high' : undefined };
+}
+
 async function tmdbByImdbId(imdbId: string): Promise<{ result: TmdbResult; type: MediaType } | null> {
   try {
     const r = await axios.get(`https://api.themoviedb.org/3/find/${imdbId}`, {
@@ -736,26 +830,52 @@ Key clues to analyze:
 6. Overall visual style: family animation, gritty drama, erotic comedy, etc. must stay CONSISTENT with your title
 
 Respond ONLY with JSON:
-{"title": "Exact title or unknown", "type": "movie" or "tv", "confidence": "high/medium/low"}
+{"title": "Exact title or unknown", "type": "movie" or "tv", "confidence": "high/medium/low", "posterTitleReadable": true/false, "billingName": "lead actor name EXACTLY as printed on poster (billing block), or empty string"}
 
 Rules:
 - Use confidence "high" or "medium" only if you genuinely recognize this specific work OR the poster title text is clearly readable.
+- **billingName**: if the poster shows cast credits (e.g. above/below title), copy the main star line (e.g. "Alan Ritchson"). If none visible, use "".
+- **posterTitleReadable**: true if the main movie title text on the poster is clearly legible.
 - Use "unknown" + "low" if you cannot name the exact release — do NOT substitute a random popular title with a loose thematic link.
 - Never output an unrelated adult live-action series for a bright family-style animated or illustrated poster.
-- Do NOT guess a title just because it fits the genre — only respond with a title you actually recognize or read from the image.`;
+- Do NOT guess a title just because it fits the genre — only respond with a title you actually recognize or read from the image.
+- Two films can share a title (e.g. "War Machine" 2017 vs 2026): still output the poster title you read; billingName helps disambiguate.`;
     const text = await azureChatVision('identifyByVisionLlm', base64, 'image/jpeg', userPrompt);
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return null;
-    const parsed = JSON.parse(m[0]) as { title?: string; type?: string; confidence?: string };
+    const parsed = JSON.parse(m[0]) as {
+      title?: string;
+      type?: string;
+      confidence?: string;
+      posterTitleReadable?: boolean;
+      billingName?: string;
+    };
     if (!parsed.title || parsed.title.toLowerCase() === 'unknown') return null;
     const gemConf = (parsed.confidence || '').toLowerCase();
     // "low" ham saqlanadi: asosiy tartibda asosan ishlatilmaydi, lekin boshqa signal bo'lmasa
     // tasdiq (llmVerifyCandidate) bosqichiga yuboriladi — aks holda "Tasdiq uchun nomzod yo'q".
     if (gemConf !== 'high' && gemConf !== 'medium' && gemConf !== 'low') return null;
 
+    const mediaType: MediaType = parsed.type === 'tv' ? 'tv' : 'movie';
+    const posterReadable = parsed.posterTitleReadable === true;
+    const billing = (parsed.billingName || '').trim();
+
+    if (mediaType === 'movie') {
+      const picked = await pickTmdbMovieForPosterTitle(
+        parsed.title,
+        'movie',
+        billing || undefined,
+        posterReadable || gemConf === 'high' || gemConf === 'medium',
+      );
+      if (picked) {
+        const confOut = picked.confidence ?? parsed.confidence;
+        return { title: picked.title, type: 'movie', confidence: confOut };
+      }
+    }
+
     const verified = await omdbSearch(parsed.title);
     if (verified) return { title: verified.title, type: verified.type, confidence: parsed.confidence };
-    return { title: parsed.title, type: parsed.type === 'tv' ? 'tv' : 'movie', confidence: parsed.confidence };
+    return { title: parsed.title, type: mediaType, confidence: parsed.confidence };
   } catch (e) {
     console.warn('LLM (rasm) xato:', (e as Error).message?.slice(0, 200));
     return null;
