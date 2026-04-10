@@ -1005,6 +1005,10 @@ or
     const ok = parsed.match === true;
     const alt = (parsed.alternativeTitle || '').trim();
     const altType: MediaType = parsed.alternativeType === 'tv' ? 'tv' : 'movie';
+    if (!ok && alt && titlesMatch(candidateTitle, alt)) {
+      console.log(`🔁 Tasdiq LLM ziddiyatli javob berdi; alternativ sarlavha o‘sha nomning o‘zi: "${candidateTitle}"`);
+      return { match: true };
+    }
     console.log(`🔍 Tasdiq LLM "${candidateTitle}": ${ok} — ${parsed.reason || ''}${alt ? ` | alt: "${alt}"` : ''}`);
     return {
       match: ok,
@@ -1014,6 +1018,20 @@ or
   } catch {
     return { match: false };
   }
+}
+
+export async function verifyImageMatchesMovie(
+  base64: string,
+  mimeType: string,
+  candidateTitle: string
+): Promise<boolean> {
+  if (!candidateTitle?.trim()) return false;
+  if (!AI_LLM_ENABLED) return true;
+  const croppedBase64 = await cropFrame(base64);
+  const aiBase64 = await downscaleForAiPipeline(croppedBase64);
+  const safeMime = mimeType.toLowerCase().startsWith('image/') ? mimeType : 'image/jpeg';
+  const verifyRes = await llmVerifyCandidate(aiBase64, candidateTitle.trim(), safeMime);
+  return verifyRes.match;
 }
 
 // ─── ASOSIY ANIQLASH ─────────────────────────────────────────────────────────
@@ -1084,28 +1102,31 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
 
   console.log(`Nomzodlar tartibi (tasdiq): ${ordered.map((c) => c.title).join(' → ') || '—'}`);
 
-  /** Yuz + LLM bir xil — aktyor va sahna mos */
+  /** Yuz + LLM bir xil bo‘lsa ham verify bosqichidan o‘tkazamiz — bir aktyorning boshqa filmi bo‘lishi mumkin. */
+  let consensusCandidate: MovieIdentified | null = null;
   if (
     faces?.title &&
     visionLlm?.title &&
     visionLlm.confidence !== 'low' &&
     titlesMatch(faces.title, visionLlm.title)
   ) {
-    const consensus: MovieIdentified = {
+    consensusCandidate = {
       title: faces.title,
       type: faces.type ?? visionLlm.type,
       confidence: visionLlm.confidence ?? faces.confidence,
     };
-    console.log('✅ faces+LLM konsensus — alohida tasdiq o‘tkazilmaydi:', consensus.title);
-    return { ok: true, identified: consensus };
+    console.log('🤝 faces+LLM konsensus — verify navbatiga birinchi qo‘yildi:', consensusCandidate.title);
   }
 
   let lastAlternative: MovieIdentified | null = null;
   let verifyRan = false;
+  const verifyQueue = consensusCandidate
+    ? [consensusCandidate, ...ordered.filter((c) => !titlesMatch(c.title, consensusCandidate!.title))]
+    : ordered;
 
-  for (let i = 0; i < Math.min(ordered.length, MAX_VERIFY); i++) {
+  for (let i = 0; i < Math.min(verifyQueue.length, MAX_VERIFY); i++) {
     verifyRan = true;
-    const cand = ordered[i];
+    const cand = verifyQueue[i];
     const verifyRes = await withTimeout(llmVerifyCandidate(aiBase64, cand.title, cropMime), 28000);
     if (verifyRes?.match) {
       console.log('✅ Tasdiqlangan:', cand.title);
@@ -1135,7 +1156,7 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
     return { ok: false, reason: 'no_candidates' };
   }
   const ambiguousList: MovieIdentified[] = [];
-  for (const c of ordered) {
+  for (const c of verifyQueue) {
     pushDistinct(ambiguousList, c);
   }
   if (lastAlternative) {

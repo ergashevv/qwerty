@@ -13,6 +13,7 @@ import {
   makeEmptyLinksSentinel,
   extractInstagramSource,
   getActorFilmFallbackCandidates,
+  verifyImageMatchesMovie,
 } from '../services/movieService';
 import { runWithLlmUsageContext } from '../services/llmUsageContext';
 import { insertAnalyticsEvent } from '../db/postgres';
@@ -43,6 +44,33 @@ import { feedbackModeReplyMarkup } from './feedbackModeBack';
 import { PROBLEM_REPORT_PHOTO_NEED_CAPTION_HTML } from '../messages/feedback';
 
 const MAX_AMBIGUOUS_IDENTIFY_RESULTS = 4;
+
+function normalizeIncomingImageMimeType(mimeType: string | undefined): string {
+  const raw = (mimeType || '').toLowerCase();
+  if (raw.includes('png')) return 'image/png';
+  if (raw.includes('webp')) return 'image/webp';
+  return 'image/jpeg';
+}
+
+function resolveIncomingImage(ctx: Context): { fileId: string; mimeType: string } | null {
+  const photos = ctx.message?.photo;
+  if (photos && photos.length > 0) {
+    const largest = photos[photos.length - 1];
+    if (largest?.file_id) {
+      return { fileId: largest.file_id, mimeType: 'image/jpeg' };
+    }
+  }
+
+  const doc = ctx.message?.document;
+  if (doc?.file_id && doc.mime_type?.startsWith('image/')) {
+    return {
+      fileId: doc.file_id,
+      mimeType: normalizeIncomingImageMimeType(doc.mime_type),
+    };
+  }
+
+  return null;
+}
 
 /**
  * Tasdiqdan o‘tmagan nomzodlar — har biri poster + qisqa ma’lumot + havolalar (fikr tug‘masiz).
@@ -155,21 +183,19 @@ export async function handlePhoto(ctx: Context): Promise<void> {
 
     await recordPhotoRequest(userId);
 
-    // Telegram dan eng katta o'lchamdagi rasmni olish
-    const photos = ctx.message?.photo;
-    if (!photos || photos.length === 0) {
+    const incomingImage = resolveIncomingImage(ctx);
+    if (!incomingImage) {
       await ctx.api.editMessageText(chatId, processing.message_id, '❌ Rasm topilmadi.');
       return;
     }
 
-    const largest = photos[photos.length - 1];
-    const fileInfo = await ctx.api.getFile(largest.file_id);
+    const fileInfo = await ctx.api.getFile(incomingImage.fileId);
     const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileInfo.file_path}`;
 
     // Rasmni yuklab olish va base64 ga o'girish
     const response = await axios.get(fileUrl, { responseType: 'arraybuffer', timeout: 15000 });
     const base64 = Buffer.from(response.data).toString('base64');
-    const mimeType = 'image/jpeg';
+    const mimeType = incomingImage.mimeType;
 
     const msgId = processing.message_id;
     await ctx.api.editMessageText(chatId, msgId, STATUS_IDENTIFY_LINES[0]);
@@ -201,8 +227,17 @@ export async function handlePhoto(ctx: Context): Promise<void> {
       );
       const textResult = await identifyFromTextDetailed(textHint);
       if (textResult.outcome === 'found') {
-        identified = textResult.identified;
-        console.log(`✅ Matn hint orqali topildi: "${identified.title}"`);
+        const textFallbackVerified = await verifyImageMatchesMovie(
+          base64,
+          mimeType,
+          textResult.identified.title
+        );
+        if (textFallbackVerified) {
+          identified = textResult.identified;
+          console.log(`✅ Matn hint orqali topildi: "${identified.title}"`);
+        } else {
+          console.log(`⚠️ Matn hint topgan film rasm bilan tasdiqlanmadi: "${textResult.identified.title}"`);
+        }
       }
     }
 
@@ -337,7 +372,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
       imdbId: details.imdbId ?? null,
       mediaType: details.mediaType ?? identified.type,
       confidence: identified.confidence ?? null,
-      photoFileId: largest.file_id,
+      photoFileId: incomingImage.fileId,
       keyboardKeepJson: JSON.stringify({ inline_keyboard: watchKb }),
     });
 

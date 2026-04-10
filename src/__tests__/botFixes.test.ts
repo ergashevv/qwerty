@@ -243,6 +243,161 @@ describe('Photo handler — darhol "Qidirilmoqda..." xabari', () => {
     expect(replyIdx).toBeGreaterThanOrEqual(0);
     expect(upsertIdx).toBeGreaterThan(replyIdx);
   });
+
+  test('image document yuborilganda document file_id bilan ishlaydi', async () => {
+    jest.mock('axios', () => ({
+      __esModule: true,
+      default: {
+        get: jest.fn(async () => ({ data: Buffer.from('fake-image') })),
+      },
+    }));
+    jest.mock('../db', () => ({
+      upsertUser: jest.fn(async () => {}),
+      recordUserActivityDay: jest.fn(async () => {}),
+      canUserSendPhoto: jest.fn(async () => ({ ok: true })),
+      recordPhotoRequest: jest.fn(async () => {}),
+      setCache: jest.fn(async () => {}),
+    }));
+    jest.mock('../services/movieService', () => ({
+      identifyMovie: jest.fn(async () => ({ ok: false, reason: 'no_candidates' })),
+      identifyFromTextDetailed: jest.fn(async () => ({ outcome: 'not_found' })),
+      buildDetailsFromResolved: jest.fn(),
+      buildDetailsWithoutTmdb: jest.fn(),
+      resolveFilmCachePhase: jest.fn(),
+      makeEmptyLinksSentinel: jest.fn(() => '{"empty":true}'),
+      extractInstagramSource: jest.fn(async () => null),
+      getActorFilmFallbackCandidates: jest.fn(async () => null),
+    }));
+    jest.mock('../handlers/rotatingStatus', () => ({
+      STATUS_IDENTIFY_LINES: ['Searching...'],
+      STATUS_DETAILS_LINES: () => ['Loading...'],
+      withRotatingStatus: jest.fn(
+        async (_ctx: unknown, _c: unknown, _m: unknown, _l: unknown, task: () => Promise<unknown>) => task()
+      ),
+    }));
+    jest.mock('../db/feedbackPending', () => ({
+      insertPendingFeedback: jest.fn(async () => 'token123'),
+    }));
+    jest.mock('../handlers/donatePrompt', () => ({
+      maybeDonateAfterSuccess: jest.fn(async () => {}),
+    }));
+    jest.mock('../db/feedbackProblemReport', () => ({
+      getProblemReportPending: jest.fn(async () => null),
+    }));
+    jest.mock('../handlers/problemReportSubmit', () => ({
+      tryCompleteProblemReport: jest.fn(async () => 'none'),
+    }));
+    jest.mock('../services/llmUsageContext', () => ({
+      runWithLlmUsageContext: jest.fn(async (_uid: number, fn: () => Promise<unknown>) => fn()),
+    }));
+    jest.mock('../db/postgres', () => ({
+      insertAnalyticsEvent: jest.fn(async () => {}),
+    }));
+
+    const getFileMock = jest.fn(async () => ({ file_path: 'docs/test.png' }));
+    const editMock = jest.fn(async () => {});
+
+    const ctx = {
+      from: { id: 1002, username: 'docuser', first_name: 'Doc' },
+      chat: { id: 1002 },
+      message: {
+        document: { file_id: 'doc123', mime_type: 'image/png' },
+      },
+      reply: jest.fn(async () => ({ message_id: 77 })),
+      api: {
+        sendChatAction: jest.fn().mockResolvedValue(undefined),
+        editMessageText: editMock,
+        getFile: getFileMock,
+      },
+    };
+
+    const { handlePhoto } = await import('../handlers/photo');
+    await handlePhoto(ctx as never);
+
+    expect(getFileMock).toHaveBeenCalledWith('doc123');
+    expect(editMock).not.toHaveBeenCalledWith(1002, 77, '❌ Rasm topilmadi.');
+  });
+
+  test('foto topilmasa matn fallback rasm bilan verify bo‘lmasa natija qaytarmaydi', async () => {
+    jest.mock('axios', () => ({
+      __esModule: true,
+      default: {
+        get: jest.fn(async () => ({ data: Buffer.from('fake-image') })),
+      },
+    }));
+    jest.mock('../db', () => ({
+      upsertUser: jest.fn(async () => {}),
+      recordUserActivityDay: jest.fn(async () => {}),
+      canUserSendPhoto: jest.fn(async () => ({ ok: true })),
+      recordPhotoRequest: jest.fn(async () => {}),
+      setCache: jest.fn(async () => {}),
+    }));
+    jest.mock('../services/movieService', () => ({
+      identifyMovie: jest.fn(async () => ({ ok: false, reason: 'no_candidates' })),
+      identifyFromTextDetailed: jest.fn(async () => ({
+        outcome: 'found',
+        identified: { title: 'Iron Man', type: 'movie', confidence: 'high' },
+      })),
+      verifyImageMatchesMovie: jest.fn(async () => false),
+      buildDetailsFromResolved: jest.fn(),
+      buildDetailsWithoutTmdb: jest.fn(),
+      resolveFilmCachePhase: jest.fn(),
+      makeEmptyLinksSentinel: jest.fn(() => '{"empty":true}'),
+      extractInstagramSource: jest.fn(async () => null),
+      getActorFilmFallbackCandidates: jest.fn(async () => null),
+    }));
+    jest.mock('../handlers/rotatingStatus', () => ({
+      STATUS_IDENTIFY_LINES: ['Searching...'],
+      STATUS_DETAILS_LINES: () => ['Loading...'],
+      withRotatingStatus: jest.fn(
+        async (_ctx: unknown, _c: unknown, _m: unknown, _l: unknown, task: () => Promise<unknown>) => task()
+      ),
+    }));
+    jest.mock('../db/feedbackPending', () => ({
+      insertPendingFeedback: jest.fn(async () => 'token123'),
+    }));
+    jest.mock('../handlers/donatePrompt', () => ({
+      maybeDonateAfterSuccess: jest.fn(async () => {}),
+    }));
+    jest.mock('../db/feedbackProblemReport', () => ({
+      getProblemReportPending: jest.fn(async () => null),
+    }));
+    jest.mock('../handlers/problemReportSubmit', () => ({
+      tryCompleteProblemReport: jest.fn(async () => 'none'),
+    }));
+    jest.mock('../services/llmUsageContext', () => ({
+      runWithLlmUsageContext: jest.fn(async (_uid: number, fn: () => Promise<unknown>) => fn()),
+    }));
+    jest.mock('../db/postgres', () => ({
+      insertAnalyticsEvent: jest.fn(async () => {}),
+    }));
+
+    const editMock = jest.fn(async () => {});
+    const ctx = {
+      from: { id: 1003, username: 'fallbackuser', first_name: 'Fallback' },
+      chat: { id: 1003 },
+      message: {
+        photo: [{ file_id: 'photo321', width: 100, height: 100, file_size: 1000 }],
+        caption: 'Iron Man',
+      },
+      reply: jest.fn(async () => ({ message_id: 88 })),
+      api: {
+        sendChatAction: jest.fn().mockResolvedValue(undefined),
+        editMessageText: editMock,
+        getFile: jest.fn(async () => ({ file_path: 'photos/test.jpg' })),
+      },
+    };
+
+    const { handlePhoto } = await import('../handlers/photo');
+    await handlePhoto(ctx as never);
+
+    expect(editMock).toHaveBeenCalledWith(
+      1003,
+      88,
+      expect.stringContaining('Bu screenshotdan filmni aniqlay olmadim.'),
+      expect.any(Object)
+    );
+  });
 });
 
 // ─── 5. Text handler — processing xabari darhol ──────────────────────────────
