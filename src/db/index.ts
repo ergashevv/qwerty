@@ -8,6 +8,8 @@ import {
   REELS_WINDOW_SECONDS,
   REELS_LIMIT_PER_WINDOW,
 } from '../config/limits';
+import type { BotLocale } from '../i18n/locale';
+import { DEFAULT_LOCALE } from '../i18n/locale';
 import { getPostgresPool } from './postgres';
 
 function utcDayString(): string {
@@ -218,10 +220,10 @@ export async function tryReserveReelsSlot(telegramId: number): Promise<boolean> 
   }
 }
 
-export function cacheKey(title: string): string {
+export function cacheKey(title: string, locale: BotLocale = DEFAULT_LOCALE): string {
   return crypto
     .createHash('sha256')
-    .update(title.toLowerCase().trim())
+    .update(`${title.toLowerCase().trim()}\0${locale}`)
     .digest('hex')
     .slice(0, 32);
 }
@@ -239,6 +241,8 @@ export interface MovieCacheEntry {
   /** TMDB asosidagi kesh qatori (canonical kalit) bilan to‘ldiriladi */
   tmdb_id?: number | null;
   media_type?: 'movie' | 'tv' | null;
+  /** Foydalanuvchi interfeys tili (plot/sarlavha qaysi tilda) */
+  ui_locale?: string | null;
 }
 
 // 30 kun: havola manzillari tez-tez o'zgarmaydi, qayta qidiruvni kamaytiradi
@@ -247,6 +251,7 @@ const CACHE_TTL_SECONDS = 30 * 24 * 60 * 60;
 export interface SetCacheOptions {
   tmdbId?: number | null;
   mediaType?: 'movie' | 'tv' | null;
+  locale?: BotLocale;
 }
 
 async function upsertMovieCacheRow(
@@ -254,14 +259,15 @@ async function upsertMovieCacheRow(
   data: MovieCacheEntry,
   now: number,
   tmdbId: number | null,
-  mediaType: 'movie' | 'tv' | null
+  mediaType: 'movie' | 'tv' | null,
+  uiLocale: BotLocale
 ): Promise<void> {
   const pool = getPostgresPool();
   await pool.query(
     `
     INSERT INTO movie_cache (
-      cache_key, title, uz_title, original_title, year, poster_url, plot_uz, watch_links, rating, imdb_url, created_at, hit_count, tmdb_id, media_type
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, $12, $13)
+      cache_key, title, uz_title, original_title, year, poster_url, plot_uz, watch_links, rating, imdb_url, created_at, hit_count, tmdb_id, media_type, ui_locale
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, $12, $13, $14)
     ON CONFLICT (cache_key) DO UPDATE SET
       title = EXCLUDED.title,
       uz_title = EXCLUDED.uz_title,
@@ -275,7 +281,8 @@ async function upsertMovieCacheRow(
       created_at = EXCLUDED.created_at,
       hit_count = 0,
       tmdb_id = COALESCE(EXCLUDED.tmdb_id, movie_cache.tmdb_id),
-      media_type = COALESCE(EXCLUDED.media_type, movie_cache.media_type)
+      media_type = COALESCE(EXCLUDED.media_type, movie_cache.media_type),
+      ui_locale = EXCLUDED.ui_locale
   `,
     [
       cacheKey,
@@ -291,16 +298,17 @@ async function upsertMovieCacheRow(
       now,
       tmdbId,
       mediaType,
+      uiLocale,
     ]
   );
 }
 
-export async function getCached(title: string): Promise<MovieCacheEntry | null> {
+export async function getCached(title: string, locale: BotLocale = DEFAULT_LOCALE): Promise<MovieCacheEntry | null> {
   const pool = getPostgresPool();
-  const key = cacheKey(title);
+  const key = cacheKey(title, locale);
   const now = Math.floor(Date.now() / 1000);
   const r = await pool.query(
-    `SELECT cache_key, title, uz_title, original_title, year, poster_url, plot_uz, watch_links, rating, imdb_url, hit_count, tmdb_id, media_type
+    `SELECT cache_key, title, uz_title, original_title, year, poster_url, plot_uz, watch_links, rating, imdb_url, hit_count, tmdb_id, media_type, ui_locale
      FROM movie_cache
      WHERE cache_key = $1 AND ($2 - created_at) < $3`,
     [key, now, CACHE_TTL_SECONDS]
@@ -315,17 +323,21 @@ export async function getCached(title: string): Promise<MovieCacheEntry | null> 
 }
 
 /** Bir xil film (boshqa sarlavha / screenshot) uchun TMDB bo‘yicha kesh (bitta qator — title-hash kalit). */
-export async function getCachedByTmdb(tmdbId: number, mediaType: 'movie' | 'tv'): Promise<MovieCacheEntry | null> {
+export async function getCachedByTmdb(
+  tmdbId: number,
+  mediaType: 'movie' | 'tv',
+  locale: BotLocale = DEFAULT_LOCALE
+): Promise<MovieCacheEntry | null> {
   const pool = getPostgresPool();
   const now = Math.floor(Date.now() / 1000);
   const r = await pool.query(
-    `SELECT cache_key, title, uz_title, original_title, year, poster_url, plot_uz, watch_links, rating, imdb_url, hit_count, tmdb_id, media_type
+    `SELECT cache_key, title, uz_title, original_title, year, poster_url, plot_uz, watch_links, rating, imdb_url, hit_count, tmdb_id, media_type, ui_locale
      FROM movie_cache
-     WHERE tmdb_id = $1 AND media_type = $2
-       AND ($3 - created_at) < $4
+     WHERE tmdb_id = $1 AND media_type = $2 AND ui_locale = $3
+       AND ($4 - created_at) < $5
      ORDER BY hit_count DESC, created_at DESC
      LIMIT 1`,
-    [tmdbId, mediaType, now, CACHE_TTL_SECONDS]
+    [tmdbId, mediaType, locale, now, CACHE_TTL_SECONDS]
   );
   const row = r.rows[0] as
     | (MovieCacheEntry & { cache_key: string; hit_count: number; watch_links: string | null })
@@ -338,11 +350,12 @@ export async function getCachedByTmdb(tmdbId: number, mediaType: 'movie' | 'tv')
 
 export async function setCache(title: string, data: MovieCacheEntry, opts?: SetCacheOptions): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
-  const titleKey = cacheKey(title);
+  const loc = opts?.locale ?? DEFAULT_LOCALE;
+  const titleKey = cacheKey(title, loc);
   const tmdbId = opts?.tmdbId ?? null;
   const mediaType = opts?.mediaType ?? null;
 
-  await upsertMovieCacheRow(titleKey, data, now, tmdbId, mediaType);
+  await upsertMovieCacheRow(titleKey, data, now, tmdbId, mediaType, loc);
 }
 
 export async function upsertUser(telegramId: number, username?: string, firstName?: string): Promise<void> {
@@ -453,3 +466,4 @@ export async function getInstagramSourceStats(limit = 15): Promise<{ account: st
 export { getPostgresPool, initPostgresSchema, closePostgresPool } from './postgres';
 export { insertFilmPhotoEvidence } from './filmEvidence';
 export { getVideoUrlCache, setVideoUrlCache } from './videoUrlCache';
+export { getUserLocale, setUserLocale } from './userLocale';

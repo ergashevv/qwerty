@@ -13,14 +13,17 @@ import {
   getWindowRequestCount,
   recordUserActivityDay,
   recordSearchRequest,
+  getUserLocale,
 } from '../db';
+import { DEFAULT_LOCALE } from '../i18n/locale';
+import { statusDetailsLines, statusTextSearchLines, t } from '../i18n/strings';
 import { insertPendingFeedback } from '../db/feedbackPending';
 import { buildBotReplyPreview } from '../utils/feedbackPreview';
 import { buildWatchKeyboard, sendMovieResult } from './photo';
 import { USER_REQUEST_LIMIT, isUnlimitedUser } from '../config/limits';
 import { extractInstagramReelUrl, extractYouTubeUrl } from '../services/reelsUrl';
 import { handleVideoLink } from './reels';
-import { STATUS_DETAILS_LINES, STATUS_TEXT_SEARCH_LINES, withRotatingStatus } from './rotatingStatus';
+import { withRotatingStatus } from './rotatingStatus';
 import { setUserTextContext } from '../services/userContext';
 import { completeSurveyProblemText, getSurveyProblemPending } from '../db/surveyBroadcast';
 import { tryCompleteProblemReport } from './problemReportSubmit';
@@ -35,6 +38,9 @@ export async function handleText(ctx: Context): Promise<void> {
   if (!userId) return;
   ackTyping(ctx);
 
+  const locale = await getUserLocale(userId);
+  const u = t(locale);
+
   const surveyPending = await getSurveyProblemPending(userId);
   if (surveyPending) {
     await Promise.all([
@@ -47,12 +53,9 @@ export async function handleText(ctx: Context): Promise<void> {
       text.slice(0, 4000)
     );
     if (saved) {
-      await ctx.reply('Rahmat! Yozganingiz qabul qilindi. ❤️');
+      await ctx.reply(u.surveyThanks);
     } else {
-      await safeReply(
-        ctx,
-        'Bu javob allaqachon qabul qilingan yoki sessiya tugagan. Kerak bo‘lsa, /help ni oching.'
-      );
+      await safeReply(ctx, u.surveyDuplicate);
     }
     return;
   }
@@ -62,13 +65,12 @@ export async function handleText(ctx: Context): Promise<void> {
   }
 
   if (text.startsWith('/')) {
-    const adminHint = process.env.ADMIN_TELEGRAM_ID?.trim() ? ', /stats, /ad (faqat admin)' : '';
-    await safeReply(
-      ctx,
-      '❓ Bunday buyruq topilmadi yoki format noto‘g‘ri.\n\n' +
-        `Mavjud: /start, /help, /feedback, /cancel${adminHint}.\n\n` +
-        'Film nomini yozing yoki screenshot yuboring.'
-    );
+    const adminHint = process.env.ADMIN_TELEGRAM_ID?.trim()
+      ? locale === 'ru'
+        ? ', /stats, /ad (только admin)'
+        : ', /stats, /ad (faqat admin)'
+      : '';
+    await safeReply(ctx, u.unknownCommand(adminHint));
     return;
   }
 
@@ -91,17 +93,13 @@ export async function handleText(ctx: Context): Promise<void> {
 
   // Faqat raqam (kino kodi emas)
   if (/^\d+$/.test(text)) {
-    await ctx.reply(
-      '❓ Raqamdan film topib bo\'lmaydi.\n\n' +
-      'Film <b>nomini</b>, aktyor <b>ismini</b> yoki syujet <b>tavsifini</b> yozing.',
-      { parse_mode: 'HTML' }
-    );
+    await ctx.reply(u.digitsOnly, { parse_mode: 'HTML' });
     return;
   }
 
   // Juda qisqa (1 harf)
   if (text.replace(/\s+/g, '').length < 2) {
-    await ctx.reply('❓ Aniqroq yozing — film nomi, aktyor ismi yoki syujet tavsifi.');
+    await ctx.reply(u.textTooShort);
     return;
   }
 
@@ -110,10 +108,7 @@ export async function handleText(ctx: Context): Promise<void> {
 
   if (!isUnlimitedUser(userId)) {
     if ((await getWindowRequestCount(userId)) >= USER_REQUEST_LIMIT) {
-      await ctx.reply(
-        `⚠️ So'rov limiti tugadi (${USER_REQUEST_LIMIT} ta / 12 soat).\n` +
-          `⏳ 12 soatdan keyin yana ${USER_REQUEST_LIMIT} ta ochiladi.`
-      );
+      await ctx.reply(u.limitReached(USER_REQUEST_LIMIT));
       return;
     }
     await incrementUserRequests(userId);
@@ -122,7 +117,7 @@ export async function handleText(ctx: Context): Promise<void> {
   let processing: { message_id: number } | undefined;
   try {
     await runWithLlmUsageContext(userId, async () => {
-    processing = await ctx.reply('🔍 Qidiruv boshlandi — kino qidirilmoqda...');
+    processing = await ctx.reply(u.searchStarted);
     void ctx.api.sendChatAction(ctx.chat!.id, 'typing');
     void recordSearchRequest(userId, 'text', { queryText: text }).catch(() => {});
 
@@ -130,52 +125,32 @@ export async function handleText(ctx: Context): Promise<void> {
       ctx,
       ctx.chat!.id,
       processing.message_id,
-      STATUS_TEXT_SEARCH_LINES,
+      statusTextSearchLines(locale),
       () => identifyFromTextDetailed(text),
       { intervalMs: 3600 }
     );
 
     if (idOutcome.outcome === 'unclear') {
-      await ctx.api.editMessageText(
-        ctx.chat!.id,
-        processing.message_id,
-        '❓ Bir nechta film mos keldi — bittasini tanlab bo‘lmadi.\n\n' +
-          '<b>Qayta yozing, aniqroq:</b>\n' +
-          '• taxminan yil (masalan: 2014)\n' +
-          '• janr (drama, multfilm, ilmiy-fantastika…)\n' +
-          '• aktyor yoki rejissor ismi',
-        { parse_mode: 'HTML' }
-      );
+      await ctx.api.editMessageText(ctx.chat!.id, processing.message_id, u.unclear, { parse_mode: 'HTML' });
       return;
     }
 
     if (idOutcome.outcome !== 'found') {
-      await ctx.api.editMessageText(
-        ctx.chat!.id,
-        processing.message_id,
-        '❌ <b>Qidiruv yakunlandi</b> — film topilmadi.\n\n' +
-          'Iltimos, qayta urinish oson bo‘lishi uchun <b>kino bilan bog‘liq rasm</b> (kadrs) yoki <b>aniqroq matn</b> yuboring.\n\n' +
-          '<b>Matn bilan sinash:</b>\n' +
-          '• Film nomi (lotin yoki kirill)\n' +
-          '• Serial/film + taxminan yil\n' +
-          '• Aktyor yoki rejissor\n' +
-          '• Syujet yoki esda qolgan sahna (2–4 qator)',
-        { parse_mode: 'HTML' }
-      );
+      await ctx.api.editMessageText(ctx.chat!.id, processing.message_id, u.notFound, { parse_mode: 'HTML' });
       return;
     }
 
     const identified = idOutcome.identified;
 
-    await ctx.api.editMessageText(ctx.chat!.id, processing.message_id, `🎯 "${identified.title}" topildi! Yuklanmoqda...`);
+    await ctx.api.editMessageText(ctx.chat!.id, processing.message_id, u.foundLoading(identified.title));
 
-    const cacheRes = await resolveFilmCachePhase(identified);
+    const cacheRes = await resolveFilmCachePhase(identified, locale);
     let details;
 
     if (cacheRes.phase === 'hit') {
       details = cacheRes.details;
     } else {
-      const detailLines = STATUS_DETAILS_LINES(identified.title);
+      const detailLines = statusDetailsLines(locale, identified.title);
       await ctx.api.editMessageText(ctx.chat!.id, processing.message_id, detailLines[0]);
       const r = cacheRes.r;
       details = await withRotatingStatus(
@@ -185,8 +160,8 @@ export async function handleText(ctx: Context): Promise<void> {
         detailLines,
         () =>
           r.ok
-            ? buildDetailsFromResolved(identified, r.meta)
-            : buildDetailsWithoutTmdb(identified, r.imdbId),
+            ? buildDetailsFromResolved(identified, r.meta, locale)
+            : buildDetailsWithoutTmdb(identified, r.imdbId, locale),
         { intervalMs: 2800 }
       );
       await setCache(
@@ -202,13 +177,13 @@ export async function handleText(ctx: Context): Promise<void> {
           rating: details.rating,
           imdb_url: details.imdbUrl || undefined,
         },
-        { tmdbId: details.tmdbId, mediaType: details.mediaType }
+        { tmdbId: details.tmdbId, mediaType: details.mediaType, locale }
       );
     }
 
     await ctx.api.deleteMessage(ctx.chat!.id, processing.message_id);
 
-    const watchKb = buildWatchKeyboard(details);
+    const watchKb = buildWatchKeyboard(details, locale);
     const pendingToken = await insertPendingFeedback({
       telegramUserId: userId,
       chatId: ctx.chat!.id,
@@ -229,18 +204,18 @@ export async function handleText(ctx: Context): Promise<void> {
       }),
     });
 
-    await sendMovieResult(ctx, details, { pendingFeedbackToken: pendingToken, confidence: identified.confidence });
+    await sendMovieResult(ctx, details, {
+      pendingFeedbackToken: pendingToken,
+      confidence: identified.confidence,
+      locale,
+    });
     });
   } catch (err) {
     console.error('Text handler xato:', err);
     const chatId = ctx.chat?.id;
     if (chatId != null) {
-      await safeEditOrNotify(
-        ctx,
-        chatId,
-        processing?.message_id,
-        '❌ Xatolik yuz berdi. Qayta urinib ko‘ring.'
-      );
+      const loc = await getUserLocale(userId).catch(() => DEFAULT_LOCALE);
+      await safeEditOrNotify(ctx, chatId, processing?.message_id, t(loc).genericError);
     }
   }
 }

@@ -2,6 +2,8 @@ import axios from 'axios';
 import { isAzureLlmConfigured, azureChatText, azureChatVision } from './azureLlm';
 import sharpLib from 'sharp';
 import { recognizeCelebrities, extractImdbId } from './rekognition';
+import type { BotLocale } from '../i18n/locale';
+import { DEFAULT_LOCALE } from '../i18n/locale';
 import type { MovieCacheEntry } from '../db';
 import { getCached, getCachedByTmdb } from '../db';
 
@@ -11,6 +13,11 @@ export interface MovieIdentified {
   title: string;
   type: MediaType;
   confidence?: string;
+  /**
+   * Ichki siyosat: verify muvaffaqiyatsiz bo'lsa ham foydalanuvchiga
+   * "Taxminiy variant" sifatida ko'rsatish xavfsizmi.
+   */
+  allowAmbiguousFallback?: boolean;
 }
 
 /** Rasm bo‘yicha aniqlash: topilmadi — yoki nomzod bor lekin LLM tasdiqidan o‘tmadi */
@@ -68,6 +75,7 @@ const AI_IMAGE_MAX_EDGE = Math.min(
 /** Instagram @username analytics — faqat UI o‘qish, kichik rasm yetarli */
 const INSTAGRAM_EXTRACT_MAX_EDGE = Math.min(1280, Math.max(480, parseInt(process.env.INSTAGRAM_EXTRACT_MAX_EDGE || '720', 10)));
 const TIMEOUT    = 8000;
+const MIN_CELEBRITIES_FOR_STRONG_FACE_SIGNAL = 2;
 
 /** Vergul bilan ajratilgan domenlar — tomosh havolalari ro'yxatidan chiqariladi (masalan: bir sayt boshqalarini bosib qolganda). */
 function watchLinkBannedHosts(): Set<string> {
@@ -79,6 +87,19 @@ function watchLinkBannedHosts(): Set<string> {
       .map((h) => h.replace(/^https?:\/\//i, '').replace(/^www\./i, '').split('/')[0]?.toLowerCase())
       .filter(Boolean),
   );
+}
+
+function withAmbiguousFallback(candidate: MovieIdentified, allow: boolean): MovieIdentified {
+  return { ...candidate, allowAmbiguousFallback: allow };
+}
+
+function canSurfaceAmbiguousCandidate(candidate: MovieIdentified): boolean {
+  return candidate.allowAmbiguousFallback !== false;
+}
+
+function stripAmbiguousFallbackFlag(candidate: MovieIdentified): MovieIdentified {
+  const { allowAmbiguousFallback: _allowAmbiguousFallback, ...cleanCandidate } = candidate;
+  return cleanCandidate;
 }
 
 // ─── YORDAMCHI ───────────────────────────────────────────────────────────────
@@ -251,10 +272,26 @@ export function cachedWatchLinksNonEmpty(watchLinksJson: string | null | undefin
   }
 }
 
-/** uz_title Kirill harflarini o'z ichiga olsa — kesh eskirgan, qayta fetch kerak. */
+function plotEmpty(locale: BotLocale): string {
+  return locale === 'ru' ? 'Описание недоступно' : 'Tavsif mavjud emas';
+}
+
+/**
+ * O‘zbek UI: kirill sarlavha — kesh eskirgan.
+ * Rus UI: kirill normal.
+ */
+export function cachedLocalizedTitleIsValid(
+  localizedTitle: string | null | undefined,
+  locale: BotLocale
+): boolean {
+  if (!localizedTitle) return true;
+  if (locale === 'ru') return true;
+  return !/[Ѐ-ӿ]/.test(localizedTitle);
+}
+
+/** @deprecated — faqat testlar / eski chaqiriqlar */
 export function cachedUzTitleIsValid(uzTitle: string | null | undefined): boolean {
-  if (!uzTitle) return true;
-  return !/[Ѐ-ӿ]/.test(uzTitle);
+  return cachedLocalizedTitleIsValid(uzTitle, 'uz');
 }
 
 export function isNoisyTitle(title: string): boolean {
@@ -688,6 +725,8 @@ async function uploadToImgbb(base64: string): Promise<string | null> {
 async function identifyByFaces(base64: string): Promise<MovieIdentified | null> {
   const celebrities = await recognizeCelebrities(base64);
   if (celebrities.length === 0) return null;
+  const allowFaceOnlyAmbiguousFallback =
+    celebrities.length >= MIN_CELEBRITIES_FOR_STRONG_FACE_SIGNAL;
 
   console.log('🎭 Rekognition:', celebrities.map(c => `${c.name}(${c.confidence.toFixed(0)}%)`).join(', '));
 
@@ -720,11 +759,18 @@ async function identifyByFaces(base64: string): Promise<MovieIdentified | null> 
       console.log(`\u{1F3AC} Kinopoisk person fallback candidates: ${titles}`);
       if (sortedKp.length === 1) {
         const c = sortedKp[0];
-        return { title: c.title || c.name || '', type: (c.media_type === 'tv' ? 'tv' : 'movie') as MediaType, confidence: 'medium' };
+        return withAmbiguousFallback(
+          {
+            title: c.title || c.name || '',
+            type: (c.media_type === 'tv' ? 'tv' : 'movie') as MediaType,
+            confidence: 'medium',
+          },
+          allowFaceOnlyAmbiguousFallback,
+        );
       }
       if (AI_LLM_ENABLED) {
         const pickG = await llmPickFromCandidates(base64, names, titles);
-        if (pickG) return pickG;
+        if (pickG) return withAmbiguousFallback(pickG, allowFaceOnlyAmbiguousFallback);
       }
     }
   }
@@ -748,7 +794,7 @@ async function identifyByFaces(base64: string): Promise<MovieIdentified | null> 
     const c = candidates[0];
     const title = c.title || c.name || '';
     const type: MediaType = (c.media_type === 'tv') ? 'tv' : 'movie';
-    return { title, type, confidence: 'medium' };
+    return withAmbiguousFallback({ title, type, confidence: 'medium' }, allowFaceOnlyAmbiguousFallback);
   }
 
   // Ko'p nomzod: LLM tanlaydi; topilmasa — TMDB reytingi bo'yicha fallback
@@ -756,15 +802,22 @@ async function identifyByFaces(base64: string): Promise<MovieIdentified | null> 
     const names = celebrities.map(c => c.name).join(', ');
     const titles = candidates.map(c => c.title || c.name).join(' | ');
     const pickG = await llmPickFromCandidates(base64, names, titles);
-    if (pickG) return pickG;
+    if (pickG) return withAmbiguousFallback(pickG, allowFaceOnlyAmbiguousFallback);
   }
   if (candidates.length > 1) {
+    if (!allowFaceOnlyAmbiguousFallback) {
+      console.log('⚠️ Bitta mashhur aktyor bo‘yicha ko‘p film chiqdi — reyting fallback ishlatilmaydi');
+      return null;
+    }
     const best = [...candidates].sort((a, b) => (b.vote_average ?? 0) - (a.vote_average ?? 0))[0];
-    return {
-      title: best.title || best.name || '',
-      type: best.media_type === 'tv' ? 'tv' : 'movie',
-      confidence: 'medium',
-    };
+    return withAmbiguousFallback(
+      {
+        title: best.title || best.name || '',
+        type: best.media_type === 'tv' ? 'tv' : 'movie',
+        confidence: 'medium',
+      },
+      false,
+    );
   }
 
   return null;
@@ -787,6 +840,7 @@ IMPORTANT RULES:
 2. If candidates are mostly talk-show/variety entries but the frame looks like a narrative film scene, set confidence to "low" and title to empty.
 3. Use "high" or "medium" only when the chosen candidate is visually consistent with the frame.
 4. If uncertain or generic frame with no clear match, return low confidence with empty title.
+4a. If the only real clue is a famous actor's face and several candidates share that actor, DO NOT choose based on actor identity alone. A generic Tom Cruise close-up, for example, must return low/empty unless costumes, setting, props, or readable text clearly point to one work.
 5. If the image is a MOVIE POSTER or KEY ART with obvious typography/title treatment, the candidate MUST match that world: do NOT pick an unrelated live-action show if the art is clearly animated, family-rated musical style, or biblical/epic illustration style.
 6. If the frame is clearly ANIMATED or CGI and a candidate is only a live-action erotic/comedy/drama series with no animation, that candidate is NOT plausible — use "low" and empty title.
 
@@ -838,6 +892,7 @@ Rules:
 - **billingName**: if the poster shows cast credits (e.g. above/below title), copy the main star line (e.g. "Alan Ritchson"). If none visible, use "".
 - **posterTitleReadable**: true if the main movie title text on the poster is clearly legible.
 - Use "unknown" + "low" if you cannot name the exact release — do NOT substitute a random popular title with a loose thematic link.
+- A famous actor alone is NOT enough. If this is just a generic close-up of Tom Cruise / Shah Rukh Khan / Jackie Chan / etc. and you lack work-specific cues, answer unknown + low.
 - Never output an unrelated adult live-action series for a bright family-style animated or illustrated poster.
 - Do NOT guess a title just because it fits the genre — only respond with a title you actually recognize or read from the image.
 - Two films can share a title (e.g. "War Machine" 2017 vs 2026): still output the poster title you read; billingName helps disambiguate.`;
@@ -870,13 +925,24 @@ Rules:
       );
       if (picked) {
         const confOut = picked.confidence ?? parsed.confidence;
-        return { title: picked.title, type: 'movie', confidence: confOut };
+        return withAmbiguousFallback(
+          { title: picked.title, type: 'movie', confidence: confOut },
+          posterReadable,
+        );
       }
     }
 
     const verified = await omdbSearch(parsed.title);
-    if (verified) return { title: verified.title, type: verified.type, confidence: parsed.confidence };
-    return { title: parsed.title, type: mediaType, confidence: parsed.confidence };
+    if (verified) {
+      return withAmbiguousFallback(
+        { title: verified.title, type: verified.type, confidence: parsed.confidence },
+        posterReadable,
+      );
+    }
+    return withAmbiguousFallback(
+      { title: parsed.title, type: mediaType, confidence: parsed.confidence },
+      posterReadable,
+    );
   } catch (e) {
     console.warn('LLM (rasm) xato:', (e as Error).message?.slice(0, 200));
     return null;
@@ -983,10 +1049,11 @@ CRITICAL RULES:
 3. If "${candidateTitle}" is ONLY a documentary / clip show ABOUT cinema (not the narrative work), answer false
 4. **Medium mismatch**: if the image is clearly ANIMATED, ILLUSTRATED POSTER ART, or family/CG feature style and "${candidateTitle}" is exclusively a live-action adult comedy/drama that looks nothing like this art — answer **false**
 5. **Poster title conflict**: if large readable poster text clearly names a different film than "${candidateTitle}", answer **false**
-6. Answer true if the frame is CONSISTENT with "${candidateTitle}" and you see nothing that clearly contradicts it (same actor present is a strong signal when it matches that work)
+6. Answer true if the frame is CONSISTENT with "${candidateTitle}" and you see nothing that clearly contradicts it
 7. Answer false when you are fairly sure it is a different title, wrong medium, or the setting/era clearly conflicts
-8. Do not require "100% proof" from one still — memorable films often have generic-looking rooms; if it plausibly fits "${candidateTitle}" AND medium/genre match, prefer true
-9. If match is false but you KNOW the exact correct title, set "alternativeTitle" / "alternativeType"; otherwise empty strings
+8. Same actor alone is NOT sufficient when that actor appears in many famous films. For generic close-ups, romance shots, or plain indoor scenes, require work-specific cues before answering true.
+9. Do not require "100% proof" from one still — memorable films often have generic-looking rooms; if it plausibly fits "${candidateTitle}" AND medium/genre match, prefer true
+10. If match is false but you KNOW the exact correct title, set "alternativeTitle" / "alternativeType"; otherwise empty strings
 
 Answer ONLY with JSON:
 {"match": true} 
@@ -1114,6 +1181,8 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
       title: faces.title,
       type: faces.type ?? visionLlm.type,
       confidence: visionLlm.confidence ?? faces.confidence,
+      allowAmbiguousFallback:
+        canSurfaceAmbiguousCandidate(faces) || canSurfaceAmbiguousCandidate(visionLlm),
     };
     console.log('🤝 faces+LLM konsensus — verify navbatiga birinchi qo‘yildi:', consensusCandidate.title);
   }
@@ -1130,11 +1199,15 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
     const verifyRes = await withTimeout(llmVerifyCandidate(aiBase64, cand.title, cropMime), 28000);
     if (verifyRes?.match) {
       console.log('✅ Tasdiqlangan:', cand.title);
-      return { ok: true, identified: cand };
+      return { ok: true, identified: stripAmbiguousFallbackFlag(cand) };
     }
     // Verify false bo'lsa lekin LLM aniq alternativ sarlavha bilsa — saqlab qo'yamiz
     if (verifyRes?.alternativeTitle && !lastAlternative) {
-      lastAlternative = { title: verifyRes.alternativeTitle, type: verifyRes.alternativeType ?? cand.type };
+      lastAlternative = {
+        title: verifyRes.alternativeTitle,
+        type: verifyRes.alternativeType ?? cand.type,
+        allowAmbiguousFallback: false,
+      };
       console.log('💡 LLM alternativ taklif:', lastAlternative.title);
     }
   }
@@ -1146,7 +1219,7 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
     const altVerify = await withTimeout(llmVerifyCandidate(aiBase64, lastAlternative.title, cropMime), 28000);
     if (altVerify?.match) {
       console.log('✅ Alternativ sarlavha tasdiqlandi:', lastAlternative.title);
-      return { ok: true, identified: lastAlternative };
+      return { ok: true, identified: stripAmbiguousFallbackFlag(lastAlternative) };
     }
     console.log('⚠️ Alternativ sarlavha ham tasdiqlanmadi:', lastAlternative.title);
   }
@@ -1162,11 +1235,16 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
   if (lastAlternative) {
     pushDistinct(ambiguousList, lastAlternative);
   }
+  const surfacedAmbiguous = ambiguousList.filter(canSurfaceAmbiguousCandidate);
+  if (surfacedAmbiguous.length === 0) {
+    console.log('⚠️ Tasdiqdan keyin faqat zaif aktyor-taxminlari qoldi — nomzodlar ko‘rsatilmaydi');
+    return { ok: false, reason: 'no_candidates' };
+  }
   console.log('⚠️ Hech bir nomzod LLM tasdiqidan o\'tmadi — foydalanuvchiga nomzodlar:', ambiguousList.map((x) => x.title).join(', '));
   return {
     ok: false,
     reason: 'llm_verify_failed',
-    candidates: ambiguousList.slice(0, 5),
+    candidates: surfacedAmbiguous.slice(0, 5).map(stripAmbiguousFallbackFlag),
   };
 }
 
@@ -1186,6 +1264,10 @@ export async function getActorFilmFallbackCandidates(
   }
   const celebrities = await recognizeCelebrities(cropped);
   if (celebrities.length === 0) return null;
+  if (celebrities.length < MIN_CELEBRITIES_FOR_STRONG_FACE_SIGNAL) {
+    console.log('⚠️ Fallback aktyor tavsiyalari bostirildi: faqat bitta aktyor topildi');
+    return null;
+  }
 
   const actorNames = celebrities.slice(0, 3).map((c) => c.name);
   const primary = celebrities[0].name;
@@ -1963,12 +2045,43 @@ export async function resolveTmdbMetadata(identified: MovieIdentified): Promise<
   };
 }
 
-export async function buildDetailsFromResolved(identified: MovieIdentified, meta: ResolvedTmdbMeta): Promise<MovieDetails> {
+export async function buildDetailsFromResolved(
+  identified: MovieIdentified,
+  meta: ResolvedTmdbMeta,
+  locale: BotLocale = DEFAULT_LOCALE
+): Promise<MovieDetails> {
   const { type } = identified;
   const { tmdbResult, displayTitle, originalTitle, year, imdbId } = meta;
   const rating = tmdbResult.vote_average ? tmdbResult.vote_average.toFixed(1) : 'N/A';
   const posterUrl = tmdbResult.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbResult.poster_path}` : null;
   const englishPlot = tmdbResult.overview || '';
+
+  if (locale === 'ru') {
+    const ruRec = tmdbResult.id ? await fetchTmdbLocalizedRecord(type, tmdbResult.id, 'ru-RU') : null;
+    const ruLine = ((type === 'tv' ? ruRec?.name : ruRec?.title) || '').trim();
+    const primaryRu = ruLine || displayTitle;
+    let plotRu = (ruRec?.overview || '').trim();
+    if (!plotRu && englishPlot) plotRu = englishPlot;
+    const [plotOut, watchLinks] = await Promise.all([
+      Promise.resolve(plotRu || plotEmpty('ru')),
+      findWatchLinks(displayTitle, originalTitle, year, primaryRu, imdbId, 'ru'),
+    ]);
+    return {
+      title: displayTitle,
+      uzTitle: primaryRu,
+      originalTitle,
+      year,
+      rating,
+      posterUrl,
+      plotUz: plotOut,
+      imdbUrl: imdbId ? `https://www.imdb.com/title/${imdbId}` : null,
+      watchLinks,
+      tmdbId: tmdbResult.id ?? null,
+      imdbId,
+      mediaType: type,
+    };
+  }
+
   const uzRec = tmdbResult.id
     ? await fetchTmdbLocalizedRecord(type, tmdbResult.id, 'uz-UZ')
     : null;
@@ -1982,8 +2095,8 @@ export async function buildDetailsFromResolved(identified: MovieIdentified, meta
     ? tmdbUzLine
     : await translateTitle(displayTitle, originalTitle, year, type);
   const [plotUz, watchLinks] = await Promise.all([
-    englishPlot ? translateToUzbek(englishPlot) : Promise.resolve('Tavsif mavjud emas'),
-    findWatchLinks(displayTitle, originalTitle, year, uzTitle, imdbId),
+    englishPlot ? translateToUzbek(englishPlot) : Promise.resolve(plotEmpty('uz')),
+    findWatchLinks(displayTitle, originalTitle, year, uzTitle, imdbId, 'uz'),
   ]);
 
   return {
@@ -2002,7 +2115,11 @@ export async function buildDetailsFromResolved(identified: MovieIdentified, meta
   };
 }
 
-export async function buildDetailsWithoutTmdb(identified: MovieIdentified, imdbIdFromOmdb: string | null): Promise<MovieDetails> {
+export async function buildDetailsWithoutTmdb(
+  identified: MovieIdentified,
+  imdbIdFromOmdb: string | null,
+  locale: BotLocale = DEFAULT_LOCALE
+): Promise<MovieDetails> {
   const { title, type } = identified;
   const displayTitle = title;
   const originalTitle = title;
@@ -2010,10 +2127,33 @@ export async function buildDetailsWithoutTmdb(identified: MovieIdentified, imdbI
   const rating = 'N/A';
   const posterUrl = null;
   const englishPlot = '';
+
+  if (locale === 'ru') {
+    const uzTitle = displayTitle;
+    const [plotUz, watchLinks] = await Promise.all([
+      Promise.resolve(plotEmpty('ru')),
+      findWatchLinks(displayTitle, originalTitle, year, uzTitle, imdbIdFromOmdb, 'ru'),
+    ]);
+    return {
+      title: displayTitle,
+      uzTitle,
+      originalTitle,
+      year,
+      rating,
+      posterUrl,
+      plotUz,
+      imdbUrl: imdbIdFromOmdb ? `https://www.imdb.com/title/${imdbIdFromOmdb}` : null,
+      watchLinks,
+      tmdbId: null,
+      imdbId: imdbIdFromOmdb,
+      mediaType: type,
+    };
+  }
+
   const uzTitle = await translateTitle(displayTitle, originalTitle, year, type);
   const [plotUz, watchLinks] = await Promise.all([
-    englishPlot ? translateToUzbek(englishPlot) : Promise.resolve('Tavsif mavjud emas'),
-    findWatchLinks(displayTitle, originalTitle, year, uzTitle, imdbIdFromOmdb),
+    englishPlot ? translateToUzbek(englishPlot) : Promise.resolve(plotEmpty('uz')),
+    findWatchLinks(displayTitle, originalTitle, year, uzTitle, imdbIdFromOmdb, 'uz'),
   ]);
 
   return {
@@ -2034,7 +2174,8 @@ export async function buildDetailsWithoutTmdb(identified: MovieIdentified, imdbI
 
 export function movieDetailsFromCache(
   cached: MovieCacheEntry,
-  opts: { tmdbId: number | null; imdbId: string | null; mediaType: MediaType }
+  opts: { tmdbId: number | null; imdbId: string | null; mediaType: MediaType },
+  locale: BotLocale = DEFAULT_LOCALE
 ): MovieDetails {
   const imdbUrl = opts.imdbId ? `https://www.imdb.com/title/${opts.imdbId}` : null;
   let watchLinks: WatchLink[] = [];
@@ -2050,7 +2191,7 @@ export function movieDetailsFromCache(
     year: cached.year || '',
     rating: cached.rating || 'N/A',
     posterUrl: cached.poster_url || null,
-    plotUz: cached.plot_uz || 'Tavsif mavjud emas',
+    plotUz: cached.plot_uz || plotEmpty(locale),
     imdbUrl,
     watchLinks,
     tmdbId: opts.tmdbId,
@@ -2066,40 +2207,51 @@ export type FilmCacheResolveResult =
 /**
  * Title kesh → TMDB resolve → canonical kesh. Miss bo‘lsa handler `withRotatingStatus` ichida build qiladi.
  */
-export async function resolveFilmCachePhase(identified: MovieIdentified): Promise<FilmCacheResolveResult> {
-  const cachedTitle = await getCached(identified.title);
+export async function resolveFilmCachePhase(
+  identified: MovieIdentified,
+  locale: BotLocale = DEFAULT_LOCALE
+): Promise<FilmCacheResolveResult> {
+  const cachedTitle = await getCached(identified.title, locale);
   if (
     cachedTitle &&
     cacheEntryMatchesIdentified(identified, cachedTitle) &&
     cachedWatchLinksNonEmpty(cachedTitle.watch_links) &&
-    cachedUzTitleIsValid(cachedTitle.uz_title)
+    cachedLocalizedTitleIsValid(cachedTitle.uz_title, locale)
   ) {
     return {
       phase: 'hit',
-      details: movieDetailsFromCache(cachedTitle, {
-        tmdbId: cachedTitle.tmdb_id ?? null,
-        imdbId: imdbIdFromMovieUrl(cachedTitle.imdb_url),
-        mediaType: identified.type,
-      }),
+      details: movieDetailsFromCache(
+        cachedTitle,
+        {
+          tmdbId: cachedTitle.tmdb_id ?? null,
+          imdbId: imdbIdFromMovieUrl(cachedTitle.imdb_url),
+          mediaType: identified.type,
+        },
+        locale
+      ),
     };
   }
 
   const r = await resolveTmdbMetadata(identified);
   if (r.ok) {
-    const cachedTmdb = await getCachedByTmdb(r.meta.tmdbId, r.meta.mediaType);
+    const cachedTmdb = await getCachedByTmdb(r.meta.tmdbId, r.meta.mediaType, locale);
     if (
       cachedTmdb &&
       cacheEntryMatchesIdentified(identified, cachedTmdb) &&
       cachedWatchLinksNonEmpty(cachedTmdb.watch_links) &&
-      cachedUzTitleIsValid(cachedTmdb.uz_title)
+      cachedLocalizedTitleIsValid(cachedTmdb.uz_title, locale)
     ) {
       return {
         phase: 'hit',
-        details: movieDetailsFromCache(cachedTmdb, {
-          tmdbId: r.meta.tmdbId,
-          imdbId: r.meta.imdbId,
-          mediaType: r.meta.mediaType,
-        }),
+        details: movieDetailsFromCache(
+          cachedTmdb,
+          {
+            tmdbId: r.meta.tmdbId,
+            imdbId: r.meta.imdbId,
+            mediaType: r.meta.mediaType,
+          },
+          locale
+        ),
       };
     }
   }
@@ -2107,10 +2259,13 @@ export async function resolveFilmCachePhase(identified: MovieIdentified): Promis
   return { phase: 'miss', r };
 }
 
-export async function getMovieDetails(identified: MovieIdentified): Promise<MovieDetails> {
+export async function getMovieDetails(
+  identified: MovieIdentified,
+  locale: BotLocale = DEFAULT_LOCALE
+): Promise<MovieDetails> {
   const r = await resolveTmdbMetadata(identified);
-  if (!r.ok) return buildDetailsWithoutTmdb(identified, r.imdbId);
-  return buildDetailsFromResolved(identified, r.meta);
+  if (!r.ok) return buildDetailsWithoutTmdb(identified, r.imdbId, locale);
+  return buildDetailsFromResolved(identified, r.meta, locale);
 }
 
 /** Instagram username validatsiya regex: harf, raqam, nuqta, pastki chiziq, 5-30 belgi */

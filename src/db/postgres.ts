@@ -351,6 +351,24 @@ export async function initPostgresSchema(): Promise<void> {
   `);
 
   await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE users ADD COLUMN locale TEXT NOT NULL DEFAULT 'uz';
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `);
+  await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE movie_cache ADD COLUMN ui_locale TEXT NOT NULL DEFAULT 'uz';
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `);
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_movie_cache_tmdb_locale
+    ON movie_cache (tmdb_id, media_type, ui_locale)
+    WHERE tmdb_id IS NOT NULL
+  `);
+
+  await p.query(`
     CREATE TABLE IF NOT EXISTS identification_problem_report_pending (
       telegram_id BIGINT PRIMARY KEY,
       predicted_title TEXT,

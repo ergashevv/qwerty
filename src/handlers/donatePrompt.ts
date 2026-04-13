@@ -10,6 +10,10 @@ import {
   markDonatePromptShown,
   setDonateOptOut,
 } from '../db/donatePrompt';
+import { getUserLocale } from '../db';
+import type { BotLocale } from '../i18n/locale';
+import { DEFAULT_LOCALE } from '../i18n/locale';
+import { t } from '../i18n/strings';
 
 function escHtml(text: string): string {
   return text
@@ -18,31 +22,24 @@ function escHtml(text: string): string {
     .replace(/>/g, '&gt;');
 }
 
-function buildDonateMessage(cfg: ReturnType<typeof getDonateConfig>): string {
-  const parts: string[] = [
-    '🚀 <b>Kinova loyihasini birgalikda saqlab qolamiz!</b>',
-    '',
-    "Do'stlar, botimiz bepul bo'lsa-da, uning ortida katta texnik xarajatlar turibdi. Biz reklamasiz va qulay muhitni saqlab qolishga harakat qilyapmiz.",
-    '',
-    "Kichik bo'lsa ham sizning yordamingiz — bu yangi server, tezroq javoblar va yanada aqlli AI demakdir. Qo'llab-quvvatlash mutlaqo ixtiyoriy, lekin biz uchun juda qadrli.",
-    '',
-    '✨ <b>Xayriya uchun:</b>',
-  ];
+function buildDonateMessage(cfg: ReturnType<typeof getDonateConfig>, locale: BotLocale): string {
+  const u = t(locale);
+  const parts: string[] = [u.donateTitle, '', u.donateBody, '', u.donateCharityHeader];
 
   if (cfg.cardNumber) {
-    parts.push('', `💳 <b>Karta:</b> <code>${escHtml(cfg.cardNumber)}</code>`);
+    parts.push('', `${u.donateCard} <code>${escHtml(cfg.cardNumber)}</code>`);
   }
   if (cfg.cardholder) {
-    parts.push('', `👤 <b>Egasi:</b> ${escHtml(cfg.cardholder)}`);
+    parts.push('', `${u.donateHolder} ${escHtml(cfg.cardholder)}`);
   }
   if (cfg.paymeUrl) {
-    parts.push('', `🔗 <a href="${escHtml(cfg.paymeUrl)}">Payme / havola</a>`);
+    parts.push('', `🔗 <a href="${escHtml(cfg.paymeUrl)}">${u.donatePayme}</a>`);
   }
   if (cfg.extraNote) {
     parts.push('', escHtml(cfg.extraNote));
   }
 
-  parts.push('', 'Katta rahmat, bizni tanlaganingiz uchun!');
+  parts.push('', u.donateFooter);
   return parts.join('\n');
 }
 
@@ -66,12 +63,13 @@ export async function maybeDonateAfterSuccess(ctx: Context): Promise<void> {
   if (next == null) return;
   if (!cooldownAllowsPrompt(row.last_donate_prompt_at, cfg.cooldownDays)) return;
 
-  const text = buildDonateMessage(cfg);
+  const locale = await getUserLocale(uid);
+  const text = buildDonateMessage(cfg, locale);
   await ctx.reply(text, {
     parse_mode: 'HTML',
     link_preview_options: { is_disabled: true },
     reply_markup: {
-      inline_keyboard: [[{ text: '✖️ Endi ko‘rsatmasin', callback_data: 'donate:dismiss' }]],
+      inline_keyboard: [[{ text: t(locale).donateDismiss, callback_data: 'donate:dismiss' }]],
     },
   });
   await markDonatePromptShown(uid, 'success', next);
@@ -97,12 +95,13 @@ export async function maybeDonateAfterFeedbackYes(ctx: Context): Promise<void> {
   if (next == null) return;
   if (!cooldownAllowsPrompt(row.last_donate_prompt_at, cfg.cooldownDays)) return;
 
-  const text = buildDonateMessage(cfg);
+  const locale = await getUserLocale(uid);
+  const text = buildDonateMessage(cfg, locale);
   await ctx.reply(text, {
     parse_mode: 'HTML',
     link_preview_options: { is_disabled: true },
     reply_markup: {
-      inline_keyboard: [[{ text: '✖️ Endi ko‘rsatmasin', callback_data: 'donate:dismiss' }]],
+      inline_keyboard: [[{ text: t(locale).donateDismiss, callback_data: 'donate:dismiss' }]],
     },
   });
   await markDonatePromptShown(uid, 'feedback', next);
@@ -110,19 +109,21 @@ export async function maybeDonateAfterFeedbackYes(ctx: Context): Promise<void> {
 
 /** So‘rovnoma / boshqa joydan — milestone hisoblamasdan, faqat ma’lumot. */
 export async function replyWithDonateInfo(ctx: Context): Promise<void> {
+  const uid = ctx.from?.id;
+  const locale: BotLocale = uid ? await getUserLocale(uid) : DEFAULT_LOCALE;
   const cfg = getDonateConfig();
   if (!cfg.enabled) {
-    await ctx.reply('Rahmat! ❤️ Tanlovingiz va fikringiz uchun minnatdormiz.', {
+    await ctx.reply(t(locale).donateThanks, {
       link_preview_options: { is_disabled: true },
     });
     return;
   }
-  const text = buildDonateMessage(cfg);
+  const text = buildDonateMessage(cfg, locale);
   await ctx.reply(text, {
     parse_mode: 'HTML',
     link_preview_options: { is_disabled: true },
     reply_markup: {
-      inline_keyboard: [[{ text: '✖️ Endi ko‘rsatmasin', callback_data: 'donate:dismiss' }]],
+      inline_keyboard: [[{ text: t(locale).donateDismiss, callback_data: 'donate:dismiss' }]],
     },
   });
 }
@@ -134,12 +135,16 @@ export async function handleDonateCallback(ctx: Context): Promise<void> {
 
   const uid = ctx.from?.id;
   if (!uid) {
-    await ctx.answerCallbackQuery({ text: 'Xato.', show_alert: true });
+    await ctx.answerCallbackQuery({ text: 'Error', show_alert: true });
     return;
   }
 
+  const loc = await getUserLocale(uid);
+
   if (data === 'donate:dismiss') {
-    await ctx.answerCallbackQuery({ text: 'Yaxshi, boshqa ko‘rsatmaymiz 🙏' });
+    await ctx.answerCallbackQuery({
+      text: loc === 'ru' ? 'Хорошо, больше не покажем 🙏' : 'Yaxshi, boshqa ko‘rsatmaymiz 🙏',
+    });
     await setDonateOptOut(uid);
     try {
       await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });

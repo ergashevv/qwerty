@@ -5,14 +5,17 @@ import {
   getProblemReportPending,
   resetFeedbackNoStreak,
 } from '../db/feedbackProblemReport';
-import { FEEDBACK_CANCEL_OK_HTML } from '../messages/feedback';
+import { feedbackT } from '../i18n/feedbackStrings';
+import type { BotLocale } from '../i18n/locale';
+import { DEFAULT_LOCALE } from '../i18n/locale';
+import { getUserLocale } from '../db';
 
 /** Shikoyat yozish rejimidan chiqish (xuddi /cancel) */
 export const FEEDBACK_BACK_CALLBACK = 'fbc:back';
 
-export function feedbackModeReplyMarkup(): InlineKeyboardMarkup {
+export function feedbackModeReplyMarkup(locale: BotLocale = DEFAULT_LOCALE): InlineKeyboardMarkup {
   return {
-    inline_keyboard: [[{ text: '◀️ Ortga', callback_data: FEEDBACK_BACK_CALLBACK }]],
+    inline_keyboard: [[{ text: feedbackT(locale).feedbackBack, callback_data: FEEDBACK_BACK_CALLBACK }]],
   };
 }
 
@@ -22,6 +25,9 @@ export async function handleFeedbackModeBack(ctx: Context): Promise<void> {
 
   await ctx.answerCallbackQuery();
 
+  const locale = await getUserLocale(uid);
+  const fb = feedbackT(locale);
+
   const pending = await getProblemReportPending(uid);
   if (!pending) {
     try {
@@ -29,7 +35,7 @@ export async function handleFeedbackModeBack(ctx: Context): Promise<void> {
     } catch {
       /* ignore */
     }
-    await ctx.reply('Shikoyat rejimi yo‘q. Film qidirishingiz mumkin.');
+    await ctx.reply(fb.feedbackNoMode);
     return;
   }
 
@@ -42,5 +48,5 @@ export async function handleFeedbackModeBack(ctx: Context): Promise<void> {
     /* ignore */
   }
 
-  await ctx.reply(FEEDBACK_CANCEL_OK_HTML, { parse_mode: 'HTML' });
+  await ctx.reply(fb.cancelOk, { parse_mode: 'HTML' });
 }

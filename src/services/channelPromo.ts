@@ -1,4 +1,7 @@
 import type { Context } from 'grammy';
+import { getUserLocale } from '../db';
+import type { BotLocale } from '../i18n/locale';
+import { t } from '../i18n/strings';
 import {
   getBotRuntimeFlag,
   getUserChannelPromoState,
@@ -44,18 +47,15 @@ export async function setChannelPromoEnabled(enabled: boolean): Promise<void> {
   cachedAt = Date.now();
 }
 
-export function getChannelPromoMessageHtml(): string {
-  return (
-    `Majburiy emas 🙂\n` +
-    `Lekin yangilanishlarni o‘tkazib yubormaslik uchun kanalimizga qo‘shilib qo‘ying.\n` +
-    `U yerda nafaqat bot yangiliklari, balki har kuni turli film tavsiyalari ham ulashib boriladi 👇\n` +
-    `@${CHANNEL_USERNAME}`
-  );
+export function getChannelPromoMessageHtml(locale: BotLocale): string {
+  return `${t(locale).channelPromo}`;
 }
 
-export function getChannelPromoKeyboard(): { inline_keyboard: Array<Array<{ text: string; url: string }>> } {
+export function getChannelPromoKeyboard(locale: BotLocale): {
+  inline_keyboard: Array<Array<{ text: string; url: string }>>;
+} {
   return {
-    inline_keyboard: [[{ text: '📣 Kanalga obuna bo‘lish', url: `https://t.me/${CHANNEL_USERNAME}` }]],
+    inline_keyboard: [[{ text: t(locale).channelBtn, url: `https://t.me/${CHANNEL_USERNAME}` }]],
   };
 }
 
@@ -119,9 +119,10 @@ export async function offerChannelPromoAfterPositiveFeedback(ctx: Context): Prom
     if (utcDayKey(last) === utcDayKey(now)) return;
   }
 
-  await ctx.reply(getChannelPromoMessageHtml(), {
+  const loc = await getUserLocale(uid);
+  await ctx.reply(getChannelPromoMessageHtml(loc), {
     parse_mode: 'HTML',
-    reply_markup: getChannelPromoKeyboard(),
+    reply_markup: getChannelPromoKeyboard(loc),
     link_preview_options: { is_disabled: true },
   });
   await markUserChannelPromoShown(uid, now);

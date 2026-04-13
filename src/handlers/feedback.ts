@@ -12,7 +12,8 @@ import { offerChannelPromoAfterPositiveFeedback } from '../services/channelPromo
 import { tryBuildFeedbackThumbB64 } from '../services/feedbackThumb';
 import { maybeDonateAfterFeedbackYes } from './donatePrompt';
 import { feedbackModeReplyMarkup } from './feedbackModeBack';
-import { PROBLEM_REPORT_AFTER_NO_HTML } from '../messages/feedback';
+import { feedbackT } from '../i18n/feedbackStrings';
+import { getUserLocale } from '../db';
 import { safeReply } from '../utils/safeTelegram';
 
 const PREFIX = 'fb:';
@@ -22,22 +23,24 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
   const data = cq?.data;
   if (!data?.startsWith(PREFIX)) return;
 
+  const uid = ctx.from?.id;
+  const fb = uid ? feedbackT(await getUserLocale(uid)) : feedbackT('uz');
+
   const rest = data.slice(PREFIX.length);
   const colon = rest.lastIndexOf(':');
   if (colon <= 0) {
-    await ctx.answerCallbackQuery({ text: 'Noto‘g‘ri format.', show_alert: true });
+    await ctx.answerCallbackQuery({ text: fb.callbackBadFormat, show_alert: true });
     return;
   }
   const keyPart = rest.slice(0, colon);
   const vote = rest.slice(colon + 1);
   if (vote !== 'y' && vote !== 'n') {
-    await ctx.answerCallbackQuery({ text: 'Noto‘g‘ri tugma.', show_alert: true });
+    await ctx.answerCallbackQuery({ text: fb.callbackBadButton, show_alert: true });
     return;
   }
 
-  const uid = ctx.from?.id;
   if (!uid) {
-    await ctx.answerCallbackQuery({ text: 'Xato.', show_alert: true });
+    await ctx.answerCallbackQuery({ text: fb.callbackErr, show_alert: true });
     return;
   }
 
@@ -47,9 +50,7 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
    * Avvalo callback ni yopamiz (matnsiz — ikkinchi bosishda noto‘g‘ri "Rahmat" chiqmasin).
    */
   await ctx.answerCallbackQuery(
-    vote === 'y'
-      ? { text: 'Rahmat — bot shu bilan o‘rganadi ❤️' }
-      : { text: 'Tushundim. Iltimos, qisqa izoh yozing ✍️' }
+    vote === 'y' ? { text: fb.thanksYes } : { text: fb.thanksNo }
   );
 
   let row;
@@ -57,10 +58,7 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
     row = await consumePendingFeedback(keyPart, uid);
   } catch (e) {
     console.error('consumePendingFeedback:', (e as Error).message);
-    await safeReply(
-      ctx,
-      '⚠️ Fikrni saqlab bo‘lmadi (server band yoki vaqtinchalik xato). Keyinroq qayta urinib ko‘ring.'
-    );
+    await safeReply(ctx, feedbackT(await getUserLocale(uid)).consumeError);
     return;
   }
 
@@ -134,9 +132,10 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
       source: row.source,
     });
 
-    await safeReply(ctx, PROBLEM_REPORT_AFTER_NO_HTML, {
+    const loc = await getUserLocale(uid);
+    await safeReply(ctx, feedbackT(loc).problemAfterNo, {
       parse_mode: 'HTML',
-      reply_markup: feedbackModeReplyMarkup(),
+      reply_markup: feedbackModeReplyMarkup(loc),
     });
   }
 }

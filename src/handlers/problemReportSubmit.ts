@@ -1,5 +1,5 @@
 import { Context } from 'grammy';
-import { upsertUser, recordUserActivityDay } from '../db';
+import { upsertUser, recordUserActivityDay, getUserLocale } from '../db';
 import { insertAnalyticsEvent } from '../db/postgres';
 import {
   clearProblemReportPending,
@@ -8,12 +8,8 @@ import {
   insertIdentificationProblemReport,
   resetFeedbackNoStreak,
 } from '../db/feedbackProblemReport';
-import {
-  PROBLEM_REPORT_REJECT_COMMAND_HTML,
-  PROBLEM_REPORT_REJECT_NUMBERS_ONLY_HTML,
-  PROBLEM_REPORT_REJECT_TOO_SHORT_HTML,
-  PROBLEM_REPORT_REJECT_URL_HTML,
-} from '../messages/feedback';
+import { feedbackT } from '../i18n/feedbackStrings';
+import type { BotLocale } from '../i18n/locale';
 import { feedbackModeReplyMarkup } from './feedbackModeBack';
 import { safeReply } from '../utils/safeTelegram';
 
@@ -24,20 +20,24 @@ export type ProblemReportSubmitResult = 'none' | 'saved' | 'invalid' | 'error';
 /**
  * Havola, buyruq yoki noto‘g‘ri format — shikoyat sifatida saqlanmaydi, foydalanuvchiga yo‘l-yo‘riq beriladi.
  */
-export function validateProblemReportBody(bodyText: string): { ok: true } | { ok: false; html: string } {
+export function validateProblemReportBody(
+  bodyText: string,
+  locale: BotLocale
+): { ok: true } | { ok: false; html: string } {
+  const fb = feedbackT(locale);
   const t = bodyText.trim();
   if (t.length < 6) {
-    return { ok: false, html: PROBLEM_REPORT_REJECT_TOO_SHORT_HTML };
+    return { ok: false, html: fb.problemRejectTooShort };
   }
   if (/https?:\/\/|www\.instagram\.com|instagram\.com\/|youtu\.be|youtube\.com\/|tiktok\.com|t\.me\//i.test(t)) {
-    return { ok: false, html: PROBLEM_REPORT_REJECT_URL_HTML };
+    return { ok: false, html: fb.problemRejectUrl };
   }
   if (/^\s*\/[A-Za-z][A-Za-z0-9_]*\s*$/.test(t)) {
-    return { ok: false, html: PROBLEM_REPORT_REJECT_COMMAND_HTML };
+    return { ok: false, html: fb.problemRejectCommand };
   }
   const digitsOnly = t.replace(/\s/g, '');
   if (/^\d+$/.test(digitsOnly) && digitsOnly.length <= 8) {
-    return { ok: false, html: PROBLEM_REPORT_REJECT_NUMBERS_ONLY_HTML };
+    return { ok: false, html: fb.problemRejectNumbersOnly };
   }
   return { ok: true };
 }
@@ -55,11 +55,12 @@ export async function tryCompleteProblemReport(
   const problemReportCtx = await getProblemReportPending(userId);
   if (!problemReportCtx) return 'none';
 
-  const check = validateProblemReportBody(bodyText);
+  const locale = await getUserLocale(userId);
+  const check = validateProblemReportBody(bodyText, locale);
   if (!check.ok) {
     await safeReply(ctx, check.html, {
       parse_mode: 'HTML',
-      reply_markup: feedbackModeReplyMarkup(),
+      reply_markup: feedbackModeReplyMarkup(locale),
     });
     return 'invalid';
   }
@@ -88,17 +89,13 @@ export async function tryCompleteProblemReport(
       body_preview: bodyText.slice(0, 500),
       ...(freeComplaint ? { complaint_kind: 'free_text' } : {}),
     });
-    await ctx.reply(
-      'Rahmat! Yozganingiz qabul qilindi — jamoamiz xabarni ko‘rib chiqadi. Yangi qidiruvni davom ettirishingiz mumkin.',
-      { link_preview_options: { is_disabled: true } }
-    );
+    await ctx.reply(feedbackT(locale).problemReportSaved, {
+      link_preview_options: { is_disabled: true },
+    });
     return 'saved';
   } catch (e) {
     console.error('identification_problem_report:', e);
-    await safeReply(
-      ctx,
-      '❌ Hozir yozuvni saqlab bo‘lmadi. Birozdan keyin qayta urinib ko‘ring yoki /help orqali yordam oling.'
-    );
+    await safeReply(ctx, feedbackT(locale).problemReportError);
     return 'error';
   }
 }
