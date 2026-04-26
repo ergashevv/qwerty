@@ -15,9 +15,9 @@ export interface PendingFeedbackInsert {
   confidence: string | null;
   photoFileId: string | null;
   keyboardKeepJson: string | null;
-  /** Faqat source=text: foydalanuvchi yozgan matn */
+  /** Foydalanuvchi yuborgan qo‘shimcha matn / caption / hint */
   userQueryText?: string | null;
-  /** Faqat source=text: bot qaytargan mazmun (qisqa) */
+  /** Bot qaytargan mazmunning qisqa preview si */
   botReplyPreview?: string | null;
 }
 

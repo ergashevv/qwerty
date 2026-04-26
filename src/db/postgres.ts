@@ -700,10 +700,55 @@ export async function runAnalyticsRetention(): Promise<void> {
   }
 
   try {
+    const stripTrace = await pool.query(
+      `
+      UPDATE analytics_events
+      SET metadata =
+        metadata
+        - 'query_text'
+        - 'user_query_text'
+        - 'bot_reply_preview'
+        - 'caption_text'
+        - 'recent_text_hint'
+        - 'text_hint'
+        - 'hint_text'
+        - 'video_url'
+        - 'body_preview'
+        - 'fallback_candidate_titles'
+        - 'fallback_actor_names'
+        - 'ambiguous_candidate_titles'
+      WHERE event_type IN ('identification_request', 'identification_result', 'identification_problem_report')
+        AND created_at < NOW() - ($1::integer * INTERVAL '1 day')
+        AND (
+          metadata ? 'query_text'
+          OR metadata ? 'user_query_text'
+          OR metadata ? 'bot_reply_preview'
+          OR metadata ? 'caption_text'
+          OR metadata ? 'recent_text_hint'
+          OR metadata ? 'text_hint'
+          OR metadata ? 'hint_text'
+          OR metadata ? 'video_url'
+          OR metadata ? 'body_preview'
+          OR metadata ? 'fallback_candidate_titles'
+          OR metadata ? 'fallback_actor_names'
+          OR metadata ? 'ambiguous_candidate_titles'
+        )
+    `,
+      [thumbDays]
+    );
+    const nt = stripTrace.rowCount ?? 0;
+    if (nt > 0) {
+      console.log(`📉 Analytics: ${nt} ta trace yozuvida matn qoldiqlari o‘chirildi (${thumbDays}+ kun)`);
+    }
+  } catch (e) {
+    console.warn('analytics trace retention:', (e as Error).message);
+  }
+
+  try {
     const r = await pool.query(
       `
       DELETE FROM analytics_events
-      WHERE event_type = 'identification_feedback'
+      WHERE event_type IN ('identification_feedback', 'identification_request', 'identification_result', 'identification_problem_report')
         AND created_at < NOW() - ($1::integer * INTERVAL '1 day')
     `,
       [eventDays]

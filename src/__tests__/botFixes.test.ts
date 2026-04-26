@@ -198,6 +198,7 @@ describe('Photo handler — darhol "Qidirilmoqda..." xabari', () => {
       recordUserActivityDay: jest.fn(async () => { callOrder.push('recordUserActivityDay'); }),
       getUserLocale: jest.fn(async () => 'uz'),
       canUserSendPhoto: jest.fn(async () => { callOrder.push('canUserSendPhoto'); return { ok: false, reason: 'burst' }; }),
+      recordSearchRequest: jest.fn(async () => {}),
       recordPhotoRequest: jest.fn(async () => {}),
       getCached: jest.fn(async () => null),
       setCache: jest.fn(async () => {}),
@@ -228,6 +229,11 @@ describe('Photo handler — darhol "Qidirilmoqda..." xabari', () => {
     jest.mock('../db/feedbackProblemReport', () => ({
       getProblemReportPending: jest.fn(async () => null),
     }));
+    jest.mock('../services/identificationTrace', () => ({
+      clipIdentificationTraceText: jest.fn((v: unknown) => v),
+      logIdentificationRequest: jest.fn(async () => {}),
+      logIdentificationResult: jest.fn(async () => {}),
+    }));
 
     const ctx = mockCtx();
     ctx.reply.mockImplementation(async () => {
@@ -257,6 +263,7 @@ describe('Photo handler — darhol "Qidirilmoqda..." xabari', () => {
       recordUserActivityDay: jest.fn(async () => {}),
       getUserLocale: jest.fn(async () => 'uz'),
       canUserSendPhoto: jest.fn(async () => ({ ok: true })),
+      recordSearchRequest: jest.fn(async () => {}),
       recordPhotoRequest: jest.fn(async () => {}),
       setCache: jest.fn(async () => {}),
     }));
@@ -295,6 +302,11 @@ describe('Photo handler — darhol "Qidirilmoqda..." xabari', () => {
     jest.mock('../db/postgres', () => ({
       insertAnalyticsEvent: jest.fn(async () => {}),
     }));
+    jest.mock('../services/identificationTrace', () => ({
+      clipIdentificationTraceText: jest.fn((v: unknown) => v),
+      logIdentificationRequest: jest.fn(async () => {}),
+      logIdentificationResult: jest.fn(async () => {}),
+    }));
 
     const getFileMock = jest.fn(async () => ({ file_path: 'docs/test.png' }));
     const editMock = jest.fn(async () => {});
@@ -332,6 +344,7 @@ describe('Photo handler — darhol "Qidirilmoqda..." xabari', () => {
       recordUserActivityDay: jest.fn(async () => {}),
       getUserLocale: jest.fn(async () => 'uz'),
       canUserSendPhoto: jest.fn(async () => ({ ok: true })),
+      recordSearchRequest: jest.fn(async () => {}),
       recordPhotoRequest: jest.fn(async () => {}),
       setCache: jest.fn(async () => {}),
     }));
@@ -365,6 +378,11 @@ describe('Photo handler — darhol "Qidirilmoqda..." xabari', () => {
     jest.mock('../db/feedbackProblemReport', () => ({
       getProblemReportPending: jest.fn(async () => null),
     }));
+    jest.mock('../services/identificationTrace', () => ({
+      clipIdentificationTraceText: jest.fn((v: unknown) => v),
+      logIdentificationRequest: jest.fn(async () => {}),
+      logIdentificationResult: jest.fn(async () => {}),
+    }));
     jest.mock('../handlers/problemReportSubmit', () => ({
       tryCompleteProblemReport: jest.fn(async () => 'none'),
     }));
@@ -373,6 +391,11 @@ describe('Photo handler — darhol "Qidirilmoqda..." xabari', () => {
     }));
     jest.mock('../db/postgres', () => ({
       insertAnalyticsEvent: jest.fn(async () => {}),
+    }));
+    jest.mock('../services/identificationTrace', () => ({
+      clipIdentificationTraceText: jest.fn((v: unknown) => v),
+      logIdentificationRequest: jest.fn(async () => {}),
+      logIdentificationResult: jest.fn(async () => {}),
     }));
 
     const editMock = jest.fn(async () => {});

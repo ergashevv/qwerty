@@ -20,6 +20,11 @@ import type { BotLocale } from '../i18n/locale';
 import { statusDetailsLines, statusIdentifyLines, t } from '../i18n/strings';
 import { insertPendingFeedback } from '../db/feedbackPending';
 import { buildBotReplyPreview } from '../utils/feedbackPreview';
+import {
+  clipIdentificationTraceText,
+  logIdentificationRequest,
+  logIdentificationResult,
+} from '../services/identificationTrace';
 import { buildWatchKeyboard, sendMovieResult } from './photo';
 import { enqueueReelsJob } from '../services/reelsQueue';
 import { identifyMovieFromReelVideo, type ReelsIdentifyResult } from '../services/reelsPipeline';
@@ -53,6 +58,8 @@ async function deliverResolvedReelsResult(
     normalizedUrl: string;
     writeUrlCache: boolean;
     locale: BotLocale;
+    traceBase: Record<string, unknown>;
+    resultSource: 'cache' | 'video';
   }
 ): Promise<void> {
   const {
@@ -65,6 +72,8 @@ async function deliverResolvedReelsResult(
     normalizedUrl,
     writeUrlCache,
     locale,
+    traceBase,
+    resultSource,
   } = params;
 
   const u = t(locale);
@@ -143,6 +152,22 @@ async function deliverResolvedReelsResult(
     }),
   });
 
+  void logIdentificationResult({
+    ...traceBase,
+    outcome: 'found',
+    result_source: resultSource,
+    title: details.title,
+    type: identified.type,
+    confidence: identified.confidence ?? null,
+    used_frame_index: identified.usedFrameIndex,
+    pending_feedback_token: pendingToken,
+    bot_reply_preview: buildBotReplyPreview({
+      uzTitle: details.uzTitle,
+      title: details.title,
+      plotUz: details.plotUz,
+    }),
+  }).catch(() => {});
+
   await sendMovieResult(ctx, details, {
     pendingFeedbackToken: pendingToken,
     confidence: identified.confidence,
@@ -160,22 +185,37 @@ export async function handleVideoLink(ctx: Context, videoUrl: string, opts: Hand
 
   const locale = await getUserLocale(userId);
   const u = t(locale);
+  const chatId = ctx.chat!.id;
   const ig = { check: u.reelsIgCheck, download: u.reelsIgDownload, fail: u.reelsIgFail, processErr: u.reelsIgErr };
   const yt = { check: u.reelsYtCheck, download: u.reelsYtDownload, fail: u.reelsYtFail, processErr: u.reelsYtErr };
   const COPY = opts.platform === 'instagram' ? ig : yt;
 
   const normalizedUrl = normalizeVideoUrlForCache(videoUrl);
   const urlHash = hashVideoUrlForCache(videoUrl);
+  const queryForFeedback = opts.fullText?.trim().slice(0, 4000) || null;
+  const hint = opts.fullText ? extractUserHintBesideFirstUrl(opts.fullText) : null;
+  const traceBase = {
+    source: 'reels' as const,
+    telegram_user_id: userId,
+    chat_id: chatId,
+    platform: opts.platform,
+    video_url: clipIdentificationTraceText(normalizedUrl, 500),
+    url_hash: urlHash,
+    query_text: clipIdentificationTraceText(queryForFeedback, 500),
+    hint_text: clipIdentificationTraceText(hint, 500),
+  };
+
+  void logIdentificationRequest({
+    ...traceBase,
+    query_length: queryForFeedback?.length ?? 0,
+  }).catch(() => {});
+  void recordSearchRequest(userId, 'reels', { queryText: queryForFeedback ?? undefined }).catch(() => {});
 
   const urlCached = await getVideoUrlCache(urlHash);
   if (urlCached) {
-    void recordSearchRequest(userId, 'reels').catch(() => {});
-    const chatId = ctx.chat!.id;
     const processing = await ctx.reply(u.reelsCached);
     const msgId = processing.message_id;
     void ctx.api.sendChatAction(chatId, 'typing');
-
-    const queryForFeedback = opts.fullText?.trim().slice(0, 4000) || null;
 
     const identified: ReelsIdentifyResult = {
       title: urlCached.title,
@@ -196,6 +236,8 @@ export async function handleVideoLink(ctx: Context, videoUrl: string, opts: Hand
           normalizedUrl,
           writeUrlCache: false,
           locale,
+          traceBase,
+          resultSource: 'cache',
         })
       );
     } catch (err) {
@@ -207,20 +249,21 @@ export async function handleVideoLink(ctx: Context, videoUrl: string, opts: Hand
 
   const reserved = await tryReserveReelsSlot(userId);
   if (!reserved) {
+    void logIdentificationResult({
+      ...traceBase,
+      outcome: 'rate_limited',
+      reason: 'reels_limit',
+    }).catch(() => {});
     const h = Math.round(REELS_WINDOW_SECONDS / 3600);
     await ctx.reply(u.reelsLimit(REELS_LIMIT_PER_WINDOW, h), { parse_mode: 'HTML' });
     return;
   }
 
-  const chatId = ctx.chat!.id;
   let processing: { message_id: number } | undefined;
   const c = COPY;
-  const hint = opts.fullText ? extractUserHintBesideFirstUrl(opts.fullText) : null;
-  const queryForFeedback = opts.fullText?.trim().slice(0, 4000) || null;
 
   try {
     processing = await ctx.reply(c.check);
-    void recordSearchRequest(userId, 'reels').catch(() => {});
     const msgId = processing.message_id;
     void ctx.api.sendChatAction(chatId, 'typing');
 
@@ -257,6 +300,22 @@ export async function handleVideoLink(ctx: Context, videoUrl: string, opts: Hand
             ]),
           };
         }
+        void logIdentificationResult({
+          ...traceBase,
+          outcome: 'no_candidates',
+          reason: 'no_consensus',
+          last_frame_available: true,
+          fallback_actor_guess_shown: Boolean(fb && fb.candidates.length > 0),
+          fallback_actor_names: fb?.actorNames?.slice(0, 3) ?? [],
+          fallback_candidate_titles: fb?.candidates?.map((c) => c.title).slice(0, 3) ?? [],
+        }).catch(() => {});
+      } else {
+        void logIdentificationResult({
+          ...traceBase,
+          outcome: 'no_candidates',
+          reason: 'no_last_frame',
+          last_frame_available: false,
+        }).catch(() => {});
       }
 
       await ctx.api.editMessageText(chatId, msgId, failText, {
@@ -277,6 +336,8 @@ export async function handleVideoLink(ctx: Context, videoUrl: string, opts: Hand
         normalizedUrl,
         writeUrlCache: true,
         locale,
+        traceBase,
+        resultSource: 'video',
       })
     );
   } catch (err) {

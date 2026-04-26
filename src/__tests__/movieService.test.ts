@@ -363,21 +363,18 @@ describe('identifyFromText — to\'liq pipeline', () => {
     expect(result?.title).toBe('Parasite');
   });
 
-  test('[TUZATILDI] o\'zbekcha nom — TMDB mos kelmasa mashhur bo\'lsa ham rad (vote_count ishonchsiz)', async () => {
-    // OMDB: titlesMatch sababli null
-    mockedAxios.get.mockResolvedValueOnce({ data: { Search: [] } });
-    // TMDB: "Iron Man" — lekin so'rov "Temir Odam", sarlavha mos emas
-    mockedAxios.get.mockResolvedValueOnce({
-      data: {
-        results: [
-          { id: 1726, title: 'Iron Man', media_type: 'movie', vote_average: 7.9, vote_count: 25000 },
-        ],
-      },
-    });
-
+  test('[TUZATILDI] o\'zbekcha alias "Temir Odam" to\'g\'ri filmga tushadi', async () => {
     const result = await identifyFromText('Temir Odam');
-    console.log(`[TUZATILDI] identifyFromText("Temir Odam") = ${JSON.stringify(result)} — mos kelmasa null`);
-    expect(result).toBeNull();
+    console.log(`[TUZATILDI] identifyFromText("Temir Odam") = ${JSON.stringify(result)} — Iron Man kutiladi`);
+    expect(result).not.toBeNull();
+    expect(result?.title).toBe('Iron Man');
+  });
+
+  test('[TUZATILDI] typo bilan yozilgan alias ham topiladi', async () => {
+    const result = await identifyFromText('Temir Odamm');
+    console.log(`[TUZATILDI] identifyFromText("Temir Odamm") = ${JSON.stringify(result)} — Iron Man kutiladi`);
+    expect(result).not.toBeNull();
+    expect(result?.title).toBe('Iron Man');
   });
 
   test('[TUZATILDI] TMDB noto\'g\'ri mashxur bo\'lmagan natijasi reject qilinadi', async () => {

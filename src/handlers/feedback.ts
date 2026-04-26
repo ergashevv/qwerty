@@ -87,6 +87,8 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
   await insertAnalyticsEvent('identification_feedback', {
     correct,
     source: row.source,
+    feedback_token: row.feedback_token ?? null,
+    pending_feedback_id: row.id,
     predicted_title: row.predicted_title,
     predicted_uz_title: row.predicted_uz_title ?? null,
     tmdb_id: row.tmdb_id ?? null,
@@ -95,15 +97,9 @@ export async function handleIdentificationFeedback(ctx: Context): Promise<void> 
     confidence: row.confidence ?? null,
     telegram_user_id: row.telegram_user_id,
     photo_file_id: row.photo_file_id ?? null,
+    user_query_text: row.user_query_text ?? null,
+    bot_reply_preview: row.bot_reply_preview ?? null,
     ...(dashboardThumbB64 ? { dashboard_thumb_b64: dashboardThumbB64 } : {}),
-    ...(row.source === 'text' && (row.user_query_text || row.bot_reply_preview)
-      ? {
-          user_query_text: row.user_query_text ?? null,
-          bot_reply_preview: row.bot_reply_preview ?? null,
-        }
-      : row.source === 'reels' && row.user_query_text
-        ? { user_query_text: row.user_query_text }
-        : {}),
   });
 
   if (correct) {

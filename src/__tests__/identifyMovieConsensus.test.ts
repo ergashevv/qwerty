@@ -58,6 +58,36 @@ describe('identifyMovie — consensus ham verifydan o‘tadi', () => {
           match: false,
           reason: 'same actor, wrong movie',
         })
+      )
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          title: 'Iron Man',
+          type: 'movie',
+          confidence: 'high',
+          posterTitleReadable: false,
+          billingName: '',
+        })
+      )
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          match: false,
+          reason: 'same actor, wrong movie',
+        })
+      )
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          title: 'Iron Man',
+          type: 'movie',
+          confidence: 'high',
+          posterTitleReadable: false,
+          billingName: '',
+        })
+      )
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          match: false,
+          reason: 'same actor, wrong movie',
+        })
       );
 
     jest.doMock('axios', () => ({
@@ -81,7 +111,7 @@ describe('identifyMovie — consensus ham verifydan o‘tadi', () => {
     const { identifyMovie } = await import('../services/movieService');
     const result = await identifyMovie(Buffer.from('frame').toString('base64'), 'image/jpeg');
 
-    expect(azureChatVisionMock).toHaveBeenCalledTimes(2);
+    expect(azureChatVisionMock).toHaveBeenCalledTimes(6);
     expect(result.ok).toBe(false);
     if (!result.ok && result.reason === 'llm_verify_failed') {
       expect(result.reason).toBe('llm_verify_failed');
@@ -113,6 +143,36 @@ describe('identifyMovie — consensus ham verifydan o‘tadi', () => {
 
     const azureChatVisionMock = jest
       .fn()
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          title: 'Parasite',
+          type: 'movie',
+          confidence: 'high',
+          posterTitleReadable: true,
+          billingName: '',
+        })
+      )
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          match: false,
+          reason: 'frame too generic for certainty',
+        })
+      )
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          title: 'Parasite',
+          type: 'movie',
+          confidence: 'high',
+          posterTitleReadable: true,
+          billingName: '',
+        })
+      )
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          match: false,
+          reason: 'frame too generic for certainty',
+        })
+      )
       .mockResolvedValueOnce(
         JSON.stringify({
           title: 'Parasite',
@@ -243,12 +303,12 @@ describe('identifyMovie — consensus ham verifydan o‘tadi', () => {
   });
 });
 
-describe('getActorFilmFallbackCandidates — zaif aktyor fallbacki bostiriladi', () => {
+describe('getActorFilmFallbackCandidates — kuchli signal bo‘lsa kandidat qaytaradi', () => {
   beforeEach(() => {
     jest.resetModules();
   });
 
-  test('faqat bitta mashhur aktyor topilsa fallback kandidat qaytarmaydi', async () => {
+  test('faqat bitta juda kuchli aktyor signali bo‘lsa fallback kandidat qaytaradi', async () => {
     const axiosGet = jest.fn(async (url: string) => {
       if (url.includes('/search/person')) {
         return { data: { results: [{ id: 7 }] } };
@@ -293,6 +353,8 @@ describe('getActorFilmFallbackCandidates — zaif aktyor fallbacki bostiriladi',
     const { getActorFilmFallbackCandidates } = await import('../services/movieService');
     const result = await getActorFilmFallbackCandidates(Buffer.from('frame').toString('base64'));
 
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result?.actorNames[0]).toBe('Tom Cruise');
+    expect(result?.candidates[0]?.title).toBe('Top Gun');
   });
 });

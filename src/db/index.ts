@@ -151,10 +151,7 @@ export async function recordSearchRequest(
 ): Promise<void> {
   const pool = getPostgresPool();
   const now = Math.floor(Date.now() / 1000);
-  const q =
-    source === 'text' && opts?.queryText
-      ? opts.queryText.trim().slice(0, 500)
-      : null;
+  const q = opts?.queryText ? opts.queryText.trim().slice(0, 500) : null;
   await pool.query(
     `INSERT INTO search_requests (telegram_id, source, created_at, query_text) VALUES ($1, $2, $3, $4)`,
     [telegramId, source, now, q]
@@ -162,11 +159,12 @@ export async function recordSearchRequest(
   await maybePruneRequestTables();
 }
 
-export async function recordPhotoRequest(telegramId: number): Promise<void> {
+export async function recordPhotoRequest(
+  telegramId: number
+): Promise<void> {
   const pool = getPostgresPool();
   const now = Math.floor(Date.now() / 1000);
   await pool.query(`INSERT INTO photo_requests (telegram_id, created_at) VALUES ($1, $2)`, [telegramId, now]);
-  await recordSearchRequest(telegramId, 'photo');
 }
 
 export async function canUserReels(telegramId: number): Promise<boolean> {

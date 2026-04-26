@@ -181,6 +181,169 @@ export function titlesMatchNative(query: string, ...titles: string[]): boolean {
   return false;
 }
 
+type PopularTitleAlias = {
+  canonicalTitle: string;
+  type: MediaType;
+  aliases: string[];
+};
+
+const POPULAR_TITLE_ALIASES: PopularTitleAlias[] = [
+  {
+    canonicalTitle: 'Iron Man',
+    type: 'movie',
+    aliases: ['temir odam', 'temir odam filmi', 'iron man', 'ironman'],
+  },
+  {
+    canonicalTitle: 'Iron Man 2',
+    type: 'movie',
+    aliases: ['temir odam 2', 'iron man 2', 'ironman 2'],
+  },
+  {
+    canonicalTitle: 'Iron Man 3',
+    type: 'movie',
+    aliases: ['temir odam 3', 'iron man 3', 'ironman 3'],
+  },
+  {
+    canonicalTitle: 'The Avengers',
+    type: 'movie',
+    aliases: ['qasoskorlar', 'qasoskorlar filmi', 'the avengers', 'avengers'],
+  },
+  {
+    canonicalTitle: 'Avengers: Endgame',
+    type: 'movie',
+    aliases: ['qasoskorlar yakuniy o\'yin', 'qasoskorlar endgame', 'avengers endgame'],
+  },
+  {
+    canonicalTitle: 'Spider-Man',
+    type: 'movie',
+    aliases: ["o'rgimchak odam", 'orgimchak odam', 'spider man', 'spiderman', 'spider-man'],
+  },
+  {
+    canonicalTitle: 'Black Panther',
+    type: 'movie',
+    aliases: ['qora pantera', 'black panther'],
+  },
+  {
+    canonicalTitle: 'The Dark Knight',
+    type: 'movie',
+    aliases: ['qorong\'u ritsar', 'qorongu ritsar', 'dark knight'],
+  },
+  {
+    canonicalTitle: 'Batman',
+    type: 'movie',
+    aliases: ['betmen', 'batman'],
+  },
+  {
+    canonicalTitle: 'WALL-E',
+    type: 'movie',
+    aliases: ['walle', 'wall e', 'wall-e'],
+  },
+  {
+    canonicalTitle: 'Parasite',
+    type: 'movie',
+    aliases: ['parazit', 'parasite'],
+  },
+  {
+    canonicalTitle: 'Miracle in Cell No. 7',
+    type: 'movie',
+    aliases: ['7. koğuştaki mucize', '7 kogustaki mucize', '7 koğustaki mucize', 'miracle in cell no 7'],
+  },
+];
+
+const CYRILLIC_TO_LATIN: Record<string, string> = {
+  а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'yo', ж: 'j', з: 'z', и: 'i',
+  й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't',
+  у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'shch', ъ: '', ы: 'i',
+  ь: '', э: 'e', ю: 'yu', я: 'ya',
+  қ: 'q', ғ: 'g', ў: "o'", ҳ: 'h', 'ʼ': "'", '’': "'", 'ʻ': "'",
+};
+
+function transliterateCyrillicToLatin(text: string): string {
+  return Array.from(text.toLowerCase())
+    .map((ch) => CYRILLIC_TO_LATIN[ch] ?? ch)
+    .join('');
+}
+
+function normalizeAliasKey(text: string): string {
+  return transliterateCyrillicToLatin(text)
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[ʻʼ‘’`´]/g, "'")
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function compactAliasKey(text: string): string {
+  return normalizeAliasKey(text).replace(/\s+/g, '');
+}
+
+function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+
+  const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  const curr = new Array<number>(b.length + 1);
+
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(
+        prev[j] + 1,
+        curr[j - 1] + 1,
+        prev[j - 1] + cost
+      );
+    }
+    for (let j = 0; j <= b.length; j++) prev[j] = curr[j];
+  }
+
+  return prev[b.length];
+}
+
+function scoreAliasMatch(query: string, alias: string): number {
+  const q = normalizeAliasKey(query);
+  const a = normalizeAliasKey(alias);
+  if (!q || !a) return 0;
+  if (q === a) return 100 + a.length;
+
+  const qc = q.replace(/\s+/g, '');
+  const ac = a.replace(/\s+/g, '');
+  if (!qc || !ac) return 0;
+  if (qc === ac) return 98 + ac.length;
+  if (qc.startsWith(ac) && qc.length - ac.length <= 3) return 95 + ac.length;
+  if (ac.startsWith(qc) && ac.length - qc.length <= 3) return 92 + qc.length;
+  if (q.includes(a) || a.includes(q)) {
+    const shorter = qc.length <= ac.length ? qc : ac;
+    const longer = qc.length <= ac.length ? ac : qc;
+    if (shorter.length >= 4 && longer.length - shorter.length <= 4) {
+      return 88 + shorter.length;
+    }
+  }
+
+  const dist = levenshteinDistance(qc, ac);
+  const maxLen = Math.max(qc.length, ac.length);
+  const limit = maxLen <= 10 ? 2 : maxLen <= 18 ? 3 : 1;
+  if (dist <= limit) return 80 - dist * 4 + Math.min(10, ac.length);
+  return 0;
+}
+
+function resolvePopularTitleAlias(query: string): MovieIdentified | null {
+  let best: { score: number; title: string; type: MediaType } | null = null;
+  for (const entry of POPULAR_TITLE_ALIASES) {
+    for (const alias of entry.aliases) {
+      const score = scoreAliasMatch(query, alias);
+      if (score <= 0) continue;
+      if (!best || score > best.score) {
+        best = { score, title: entry.canonicalTitle, type: entry.type };
+      }
+    }
+  }
+  if (!best) return null;
+  return { title: best.title, type: best.type, confidence: best.score >= 95 ? 'high' : 'medium' };
+}
+
 // Stop-words that are too common to count as meaningful matches
 const STOP_WORDS = new Set([
   'the', 'a', 'an', 'of', 'in', 'on', 'at', 'to', 'and', 'or', 'is',
@@ -726,7 +889,8 @@ async function identifyByFaces(base64: string): Promise<MovieIdentified | null> 
   const celebrities = await recognizeCelebrities(base64);
   if (celebrities.length === 0) return null;
   const allowFaceOnlyAmbiguousFallback =
-    celebrities.length >= MIN_CELEBRITIES_FOR_STRONG_FACE_SIGNAL;
+    celebrities.length >= MIN_CELEBRITIES_FOR_STRONG_FACE_SIGNAL ||
+    (celebrities[0]?.confidence ?? 0) >= 96;
 
   console.log('🎭 Rekognition:', celebrities.map(c => `${c.name}(${c.confidence.toFixed(0)}%)`).join(', '));
 
@@ -816,7 +980,7 @@ async function identifyByFaces(base64: string): Promise<MovieIdentified | null> 
         type: best.media_type === 'tv' ? 'tv' : 'movie',
         confidence: 'medium',
       },
-      false,
+      allowFaceOnlyAmbiguousFallback,
     );
   }
 
@@ -998,6 +1162,40 @@ async function downscaleForInstagramExtract(base64: string): Promise<string> {
   }
 }
 
+async function enhanceForAiVariant(base64: string): Promise<string> {
+  try {
+    const buf = Buffer.from(base64, 'base64');
+    const meta = await sharpLib(buf).metadata();
+    const w = meta.width || 0;
+    const h = meta.height || 0;
+    let img = sharpLib(buf).rotate().normalize().sharpen();
+    if (w && h) {
+      const longEdge = Math.max(w, h);
+      if (longEdge > AI_IMAGE_MAX_EDGE) {
+        img = img.resize(AI_IMAGE_MAX_EDGE, AI_IMAGE_MAX_EDGE, {
+          fit: 'inside',
+          withoutEnlargement: true,
+        });
+      }
+    }
+    const out = await img.jpeg({ quality: 88, mozjpeg: true }).toBuffer();
+    return out.toString('base64');
+  } catch {
+    return base64;
+  }
+}
+
+type PreparedImageVariant = {
+  label: string;
+  base64: string;
+};
+
+function pushPreparedVariant(variants: PreparedImageVariant[], variant: PreparedImageVariant): boolean {
+  if (variants.some((existing) => existing.base64 === variant.base64)) return false;
+  variants.push(variant);
+  return true;
+}
+
 async function cropFrame(base64: string): Promise<string> {
   try {
     const buf = Buffer.from(base64, 'base64');
@@ -1110,28 +1308,33 @@ function pushDistinct(candidates: MovieIdentified[], m: MovieIdentified | null |
   candidates.push(m);
 }
 
-/**
- * Rasm bo'yicha film: Azure OpenAI multimodal LLM + AWS Rekognition / tasdiq.
- */
-export async function identifyMovie(base64: string, mimeType: string, textHint?: string | null): Promise<IdentifyMovieResult> {
+function mergeDistinctCandidates(...lists: MovieIdentified[][]): MovieIdentified[] {
+  const merged: MovieIdentified[] = [];
+  for (const list of lists) {
+    for (const item of list) {
+      pushDistinct(merged, item);
+    }
+  }
+  return merged;
+}
+
+async function identifyMovieOnPreparedImage(
+  preparedBase64: string,
+  mimeType: string,
+  textHint?: string | null,
+  passLabel = 'Pass1'
+): Promise<IdentifyMovieResult> {
   const withTimeout = <T>(p: Promise<T>, ms = 24000): Promise<T | null> =>
     Promise.race([p, new Promise<null>(res => setTimeout(() => res(null), ms))]).catch(() => null);
-
-  if (!AI_LLM_ENABLED) {
-    console.warn('identifyMovie: Azure OpenAI sozlanmagan — rasm bo\'yicha aniqlash o\'chirilgan');
-    return { ok: false, reason: 'no_candidates' };
-  }
-
-  const croppedBase64 = await cropFrame(base64);
-  const aiBase64 = await downscaleForAiPipeline(croppedBase64);
-  const cropMime = 'image/jpeg';
+  const aiBase64 = preparedBase64;
+  const cropMime = mimeType.toLowerCase().startsWith('image/') ? mimeType : 'image/jpeg';
 
   const [faces, visionLlm] = await Promise.all([
     withTimeout(identifyByFaces(aiBase64), 25000),
     withTimeout(identifyByVisionLlm(aiBase64, textHint)),
   ]);
 
-  console.log(`Pass1 — Faces: ${faces?.title || '-'}, LLM: ${visionLlm?.title || '-'}`);
+  console.log(`${passLabel} — Faces: ${faces?.title || '-'}, LLM: ${visionLlm?.title || '-'}`);
 
   const ordered: MovieIdentified[] = [];
   const pass1 = [faces, visionLlm].filter(Boolean) as MovieIdentified[];
@@ -1168,7 +1371,7 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
     }
   }
 
-  console.log(`Nomzodlar tartibi (tasdiq): ${ordered.map((c) => c.title).join(' → ') || '—'}`);
+  console.log(`${passLabel} — Nomzodlar tartibi (tasdiq): ${ordered.map((c) => c.title).join(' → ') || '—'}`);
 
   /** Yuz + LLM bir xil bo‘lsa ham verify bosqichidan o‘tkazamiz — bir aktyorning boshqa filmi bo‘lishi mumkin. */
   let consensusCandidate: MovieIdentified | null = null;
@@ -1185,7 +1388,7 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
       allowAmbiguousFallback:
         canSurfaceAmbiguousCandidate(faces) || canSurfaceAmbiguousCandidate(visionLlm),
     };
-    console.log('🤝 faces+LLM konsensus — verify navbatiga birinchi qo‘yildi:', consensusCandidate.title);
+    console.log(`${passLabel} — 🤝 faces+LLM konsensus — verify navbatiga birinchi qo‘yildi:`, consensusCandidate.title);
   }
 
   let lastAlternative: MovieIdentified | null = null;
@@ -1199,7 +1402,7 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
     const cand = verifyQueue[i];
     const verifyRes = await withTimeout(llmVerifyCandidate(aiBase64, cand.title, cropMime), 28000);
     if (verifyRes?.match) {
-      console.log('✅ Tasdiqlangan:', cand.title);
+      console.log(`${passLabel} — ✅ Tasdiqlangan:`, cand.title);
       return { ok: true, identified: stripAmbiguousFallbackFlag(cand) };
     }
     // Verify false bo'lsa lekin LLM aniq alternativ sarlavha bilsa — saqlab qo'yamiz
@@ -1209,7 +1412,7 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
         type: verifyRes.alternativeType ?? cand.type,
         allowAmbiguousFallback: false,
       };
-      console.log('💡 LLM alternativ taklif:', lastAlternative.title);
+      console.log(`${passLabel} — 💡 LLM alternativ taklif:`, lastAlternative.title);
     }
   }
 
@@ -1219,14 +1422,14 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
     verifyRan = true;
     const altVerify = await withTimeout(llmVerifyCandidate(aiBase64, lastAlternative.title, cropMime), 28000);
     if (altVerify?.match) {
-      console.log('✅ Alternativ sarlavha tasdiqlandi:', lastAlternative.title);
+      console.log(`${passLabel} — ✅ Alternativ sarlavha tasdiqlandi:`, lastAlternative.title);
       return { ok: true, identified: stripAmbiguousFallbackFlag(lastAlternative) };
     }
-    console.log('⚠️ Alternativ sarlavha ham tasdiqlanmadi:', lastAlternative.title);
+    console.log(`${passLabel} — ⚠️ Alternativ sarlavha ham tasdiqlanmadi:`, lastAlternative.title);
   }
 
   if (!verifyRan) {
-    console.log('⚠️ Tasdiq uchun nomzod yo‘q');
+    console.log(`${passLabel} — ⚠️ Tasdiq uchun nomzod yo‘q`);
     return { ok: false, reason: 'no_candidates' };
   }
   const ambiguousList: MovieIdentified[] = [];
@@ -1238,15 +1441,67 @@ export async function identifyMovie(base64: string, mimeType: string, textHint?:
   }
   const surfacedAmbiguous = ambiguousList.filter(canSurfaceAmbiguousCandidate);
   if (surfacedAmbiguous.length === 0) {
-    console.log('⚠️ Tasdiqdan keyin faqat zaif aktyor-taxminlari qoldi — nomzodlar ko‘rsatilmaydi');
+    console.log(`${passLabel} — ⚠️ Tasdiqdan keyin faqat zaif aktyor-taxminlari qoldi — nomzodlar ko‘rsatilmaydi`);
     return { ok: false, reason: 'no_candidates' };
   }
-  console.log('⚠️ Hech bir nomzod LLM tasdiqidan o\'tmadi — foydalanuvchiga nomzodlar:', ambiguousList.map((x) => x.title).join(', '));
+  console.log(`${passLabel} — ⚠️ Hech bir nomzod LLM tasdiqidan o\'tmadi — foydalanuvchiga nomzodlar:`, ambiguousList.map((x) => x.title).join(', '));
   return {
     ok: false,
     reason: 'llm_verify_failed',
     candidates: surfacedAmbiguous.slice(0, 5).map(stripAmbiguousFallbackFlag),
   };
+}
+
+/**
+ * Rasm bo'yicha film: Azure OpenAI multimodal LLM + AWS Rekognition / tasdiq.
+ */
+export async function identifyMovie(base64: string, mimeType: string, textHint?: string | null): Promise<IdentifyMovieResult> {
+  if (!AI_LLM_ENABLED) {
+    console.warn('identifyMovie: Azure OpenAI sozlanmagan — rasm bo\'yicha aniqlash o\'chirilgan');
+    return { ok: false, reason: 'no_candidates' };
+  }
+
+  const variants: PreparedImageVariant[] = [];
+  const croppedBase64 = await cropFrame(base64);
+  const primaryBase64 = await downscaleForAiPipeline(croppedBase64);
+  pushPreparedVariant(variants, { label: 'Pass1', base64: primaryBase64 });
+
+  const collected: MovieIdentified[][] = [];
+  let firstFailure: IdentifyMovieResult | null = null;
+  let fullPrepared = false;
+  let enhancedPrepared = false;
+
+  for (let i = 0; i < variants.length; i++) {
+    const variant = variants[i];
+    const result = await identifyMovieOnPreparedImage(variant.base64, 'image/jpeg', textHint, variant.label);
+    if (result.ok) return result;
+    if (!firstFailure) firstFailure = result;
+    if (result.reason === 'llm_verify_failed' && result.candidates.length > 0) {
+      collected.push(result.candidates);
+    }
+
+    if (i === 0 && !fullPrepared) {
+      const fullBase64 = await downscaleForAiPipeline(base64);
+      const addedFull = pushPreparedVariant(variants, { label: 'Pass2', base64: fullBase64 });
+      fullPrepared = true;
+      if (!addedFull && !enhancedPrepared) {
+        const enhancedBase64 = await enhanceForAiVariant(base64);
+        pushPreparedVariant(variants, { label: 'Pass3', base64: enhancedBase64 });
+        enhancedPrepared = true;
+      }
+    } else if (i === 1 && !enhancedPrepared) {
+      const enhancedBase64 = await enhanceForAiVariant(base64);
+      pushPreparedVariant(variants, { label: 'Pass3', base64: enhancedBase64 });
+      enhancedPrepared = true;
+    }
+  }
+
+  const merged = mergeDistinctCandidates(...collected);
+  if (merged.length > 0) {
+    return { ok: false, reason: 'llm_verify_failed', candidates: merged.slice(0, 5) };
+  }
+
+  return firstFailure ?? { ok: false, reason: 'no_candidates' };
 }
 
 /**
@@ -1265,8 +1520,11 @@ export async function getActorFilmFallbackCandidates(
   }
   const celebrities = await recognizeCelebrities(cropped);
   if (celebrities.length === 0) return null;
-  if (celebrities.length < MIN_CELEBRITIES_FOR_STRONG_FACE_SIGNAL) {
-    console.log('⚠️ Fallback aktyor tavsiyalari bostirildi: faqat bitta aktyor topildi');
+  if (
+    celebrities.length < MIN_CELEBRITIES_FOR_STRONG_FACE_SIGNAL &&
+    (celebrities[0]?.confidence ?? 0) < 96
+  ) {
+    console.log('⚠️ Fallback aktyor tavsiyalari bostirildi: signal zaif');
     return null;
   }
 
@@ -1404,6 +1662,12 @@ export async function identifyFromTextDetailed(query: string): Promise<IdentifyF
   // 1. Literal OMDB/TMDB — nom bo'lib ko'rinadigan qisqa so'rovlar (7 gacha so'z; syujet emas)
   const literalWordOk = words.length >= 1 && words.length <= 7;
   if (literalWordOk && !looksLikeSentencePlot(query)) {
+    const aliasHit = resolvePopularTitleAlias(query);
+    if (aliasHit) {
+      console.log(`🔤 Alias match: "${query}" -> "${aliasHit.title}"`);
+      return found(aliasHit);
+    }
+
     const omdb = await omdbSearch(query);
     if (omdb) return found({ title: omdb.title, type: omdb.type });
 

@@ -18,13 +18,20 @@ import {
   getActorFilmFallbackCandidates,
   verifyImageMatchesMovie,
 } from '../services/movieService';
+import {
+  clipIdentificationTraceText,
+  logIdentificationRequest,
+  logIdentificationResult,
+} from '../services/identificationTrace';
 import { runWithLlmUsageContext } from '../services/llmUsageContext';
 import { insertAnalyticsEvent } from '../db/postgres';
 import { getRecentUserText, clearUserTextContext } from '../services/userContext';
+import { buildBotReplyPreview } from '../utils/feedbackPreview';
 import {
   setCache,
   upsertUser,
   canUserSendPhoto,
+  recordSearchRequest,
   recordPhotoRequest,
   recordUserActivityDay,
   getUserLocale,
@@ -166,8 +173,42 @@ export async function handlePhoto(ctx: Context): Promise<void> {
       recordUserActivityDay(userId),
     ]);
 
+    const incomingImage = resolveIncomingImage(ctx);
+    if (!incomingImage) {
+      await ctx.api.editMessageText(chatId, processing.message_id, u.photoNoImage);
+      return;
+    }
+
+    const captionHint = ctx.message?.caption?.trim() || null;
+    const recentTextHint = getRecentUserText(userId);
+    const textHint = captionHint || recentTextHint || null;
+    const textHintSource = captionHint ? 'caption' : recentTextHint ? 'recent_text' : null;
+    const photoTraceBase = {
+      source: 'photo' as const,
+      telegram_user_id: userId,
+      chat_id: chatId,
+      photo_file_id: incomingImage.fileId,
+      text_hint_source: textHintSource,
+      text_hint: clipIdentificationTraceText(textHint, 400),
+      caption_text: clipIdentificationTraceText(captionHint, 400),
+      recent_text_hint: clipIdentificationTraceText(recentTextHint, 400),
+      mime_type: incomingImage.mimeType,
+    };
+
+    void logIdentificationRequest({
+      ...photoTraceBase,
+      has_caption: Boolean(captionHint),
+    }).catch(() => {});
+
+    void recordSearchRequest(userId, 'photo', { queryText: textHint ?? undefined }).catch(() => {});
+
     const photoGate = await canUserSendPhoto(userId);
     if (!photoGate.ok) {
+      void logIdentificationResult({
+        ...photoTraceBase,
+        outcome: 'rate_limited',
+        rate_limit_reason: photoGate.reason,
+      }).catch(() => {});
       if (photoGate.reason === 'burst') {
         const m = Math.round(PHOTO_BURST_WINDOW_SECONDS / 60);
         await ctx.api.editMessageText(
@@ -189,12 +230,6 @@ export async function handlePhoto(ctx: Context): Promise<void> {
 
     await recordPhotoRequest(userId);
 
-    const incomingImage = resolveIncomingImage(ctx);
-    if (!incomingImage) {
-      await ctx.api.editMessageText(chatId, processing.message_id, u.photoNoImage);
-      return;
-    }
-
     const fileInfo = await ctx.api.getFile(incomingImage.fileId);
     const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileInfo.file_path}`;
 
@@ -206,11 +241,6 @@ export async function handlePhoto(ctx: Context): Promise<void> {
     const msgId = processing.message_id;
     await ctx.api.editMessageText(chatId, msgId, statusIdentifyLines(locale)[0]);
 
-    // Foto caption yoki oldingi matn xabardan hint olish
-    const captionHint = ctx.message?.caption?.trim() || null;
-    const recentTextHint = getRecentUserText(userId);
-    const textHint = captionHint || recentTextHint || null;
-
     const idRes = await withRotatingStatus(
       ctx,
       chatId,
@@ -221,6 +251,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
     );
 
     let identified = idRes.ok ? idRes.identified : null;
+    let identifiedFromTextFallback = false;
     const photoFail: IdentifyMovieResult | null = idRes.ok ? null : idRes;
 
     // Rasm orqali topilmadi — matn hint bilan fallback
@@ -240,6 +271,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
         );
         if (textFallbackVerified) {
           identified = textResult.identified;
+          identifiedFromTextFallback = true;
           console.log(`✅ Matn hint orqali topildi: "${identified.title}"`);
         } else {
           console.log(`⚠️ Matn hint topgan film rasm bilan tasdiqlanmadi: "${textResult.identified.title}"`);
@@ -272,6 +304,13 @@ export async function handlePhoto(ctx: Context): Promise<void> {
         photoFail.candidates.length > 0
       ) {
         const amb = photoFail.candidates;
+        void logIdentificationResult({
+          ...photoTraceBase,
+          outcome: 'ambiguous',
+          reason: photoFail.reason,
+          ambiguous_candidate_count: amb.length,
+          ambiguous_candidate_titles: amb.map((c) => c.title).slice(0, 5),
+        }).catch(() => {});
         await ctx.api.deleteMessage(chatId, processing.message_id).catch(() => {});
         await ctx.reply(u.ambiguousIntro, { parse_mode: 'HTML' });
         await sendAmbiguousCandidateResults(ctx, amb, locale);
@@ -295,6 +334,15 @@ export async function handlePhoto(ctx: Context): Promise<void> {
           ]),
         };
       }
+
+      void logIdentificationResult({
+        ...photoTraceBase,
+        outcome: llmRejected ? 'llm_verify_failed' : 'no_candidates',
+        reason: photoFail && !photoFail.ok ? photoFail.reason : null,
+        fallback_actor_guess_shown: Boolean(fb && fb.candidates.length > 0),
+        fallback_actor_names: fb?.actorNames?.slice(0, 3) ?? [],
+        fallback_candidate_titles: fb?.candidates?.map((c) => c.title).slice(0, 3) ?? [],
+      }).catch(() => {});
 
       await ctx.api.editMessageText(chatId, processing.message_id, body, {
         parse_mode: 'HTML',
@@ -345,6 +393,11 @@ export async function handlePhoto(ctx: Context): Promise<void> {
     await ctx.api.deleteMessage(chatId, msgId);
 
     const watchKb = buildWatchKeyboard(details, locale);
+    const botReplyPreview = buildBotReplyPreview({
+      uzTitle: details.uzTitle,
+      title: details.title,
+      plotUz: details.plotUz,
+    });
     const pendingToken = await insertPendingFeedback({
       telegramUserId: userId,
       chatId: ctx.chat!.id,
@@ -357,7 +410,20 @@ export async function handlePhoto(ctx: Context): Promise<void> {
       confidence: identified.confidence ?? null,
       photoFileId: incomingImage.fileId,
       keyboardKeepJson: JSON.stringify({ inline_keyboard: watchKb }),
+      userQueryText: textHint ?? null,
+      botReplyPreview,
     });
+
+    void logIdentificationResult({
+      ...photoTraceBase,
+      outcome: 'found',
+      result_source: identifiedFromTextFallback ? 'text_fallback' : 'image',
+      title: details.title,
+      type: identified.type,
+      confidence: identified.confidence ?? null,
+      pending_feedback_token: pendingToken,
+      bot_reply_preview: botReplyPreview,
+    }).catch(() => {});
 
     await sendMovieResult(ctx, details, {
       pendingFeedbackToken: pendingToken,
