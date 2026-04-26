@@ -3,7 +3,7 @@ describe('identifyMovie — consensus ham verifydan o‘tadi', () => {
     jest.resetModules();
   });
 
-  test('bitta mashhur aktyorli generic kadr verify false bo‘lsa taxminiy nomzodlarni qaytarmaydi', async () => {
+  test('yuqori ishonchli vision kadr verify false bo‘lsa ham taxminiy nomzod sifatida qoladi', async () => {
     const axiosGet = jest.fn(async (url: string) => {
       if (url.includes('/search/person')) {
         return { data: { results: [{ id: 1 }] } };
@@ -83,8 +83,11 @@ describe('identifyMovie — consensus ham verifydan o‘tadi', () => {
 
     expect(azureChatVisionMock).toHaveBeenCalledTimes(2);
     expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toBe('no_candidates');
+    if (!result.ok && result.reason === 'llm_verify_failed') {
+      expect(result.reason).toBe('llm_verify_failed');
+      expect(result.candidates[0]?.title).toBe('Iron Man');
+    } else {
+      throw new Error(`Expected llm_verify_failed, got ${result.ok ? 'ok' : result.reason}`);
     }
   });
 

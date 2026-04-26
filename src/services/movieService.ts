@@ -915,6 +915,7 @@ Rules:
     const mediaType: MediaType = parsed.type === 'tv' ? 'tv' : 'movie';
     const posterReadable = parsed.posterTitleReadable === true;
     const billing = (parsed.billingName || '').trim();
+    const allowAmbiguous = posterReadable || gemConf === 'high' || gemConf === 'medium';
 
     if (mediaType === 'movie') {
       const picked = await pickTmdbMovieForPosterTitle(
@@ -927,7 +928,7 @@ Rules:
         const confOut = picked.confidence ?? parsed.confidence;
         return withAmbiguousFallback(
           { title: picked.title, type: 'movie', confidence: confOut },
-          posterReadable,
+          allowAmbiguous || Boolean(picked.confidence),
         );
       }
     }
@@ -936,12 +937,12 @@ Rules:
     if (verified) {
       return withAmbiguousFallback(
         { title: verified.title, type: verified.type, confidence: parsed.confidence },
-        posterReadable,
+        allowAmbiguous,
       );
     }
     return withAmbiguousFallback(
       { title: parsed.title, type: mediaType, confidence: parsed.confidence },
-      posterReadable,
+      allowAmbiguous,
     );
   } catch (e) {
     console.warn('LLM (rasm) xato:', (e as Error).message?.slice(0, 200));
