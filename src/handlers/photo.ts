@@ -52,6 +52,21 @@ import { feedbackModeReplyMarkup } from './feedbackModeBack';
 import { feedbackT } from '../i18n/feedbackStrings';
 
 const MAX_AMBIGUOUS_IDENTIFY_RESULTS = 4;
+const PHOTO_ALLOW_UNVERIFIED_TEXT_FALLBACK =
+  (process.env.PHOTO_ALLOW_UNVERIFIED_TEXT_FALLBACK || 'true').trim().toLowerCase() !== 'false';
+
+function canUseUnverifiedTextFallback(identified: MovieIdentified): boolean {
+  if (!PHOTO_ALLOW_UNVERIFIED_TEXT_FALLBACK) return false;
+  return (identified.confidence || '').toLowerCase() !== 'low';
+}
+
+function textFallbackConfidence(
+  identified: MovieIdentified,
+  verified: boolean
+): string | undefined {
+  if (verified) return identified.confidence;
+  return 'medium';
+}
 
 function normalizeIncomingImageMimeType(mimeType: string | undefined): string {
   const raw = (mimeType || '').toLowerCase();
@@ -269,10 +284,16 @@ export async function handlePhoto(ctx: Context): Promise<void> {
           mimeType,
           textResult.identified.title
         );
-        if (textFallbackVerified) {
-          identified = textResult.identified;
+        if (textFallbackVerified || canUseUnverifiedTextFallback(textResult.identified)) {
+          identified = {
+            ...textResult.identified,
+            confidence: textFallbackConfidence(textResult.identified, textFallbackVerified),
+          };
           identifiedFromTextFallback = true;
-          console.log(`✅ Matn hint orqali topildi: "${identified.title}"`);
+          console.log(
+            `✅ Matn hint orqali topildi: "${identified.title}"` +
+            (textFallbackVerified ? '' : ' (verify yumshatildi)')
+          );
         } else {
           console.log(`⚠️ Matn hint topgan film rasm bilan tasdiqlanmadi: "${textResult.identified.title}"`);
         }

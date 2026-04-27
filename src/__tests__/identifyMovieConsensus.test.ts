@@ -3,7 +3,7 @@ describe('identifyMovie — consensus ham verifydan o‘tadi', () => {
     jest.resetModules();
   });
 
-  test('yuqori ishonchli vision kadr verify false bo‘lsa ham taxminiy nomzod sifatida qoladi', async () => {
+  test('yuqori ishonchli vision kadr verify false bo‘lsa ham best-effort natija bo‘ladi', async () => {
     const axiosGet = jest.fn(async (url: string) => {
       if (url.includes('/search/person')) {
         return { data: { results: [{ id: 1 }] } };
@@ -111,17 +111,15 @@ describe('identifyMovie — consensus ham verifydan o‘tadi', () => {
     const { identifyMovie } = await import('../services/movieService');
     const result = await identifyMovie(Buffer.from('frame').toString('base64'), 'image/jpeg');
 
-    expect(azureChatVisionMock).toHaveBeenCalledTimes(6);
-    expect(result.ok).toBe(false);
-    if (!result.ok && result.reason === 'llm_verify_failed') {
-      expect(result.reason).toBe('llm_verify_failed');
-      expect(result.candidates[0]?.title).toBe('Iron Man');
-    } else {
-      throw new Error(`Expected llm_verify_failed, got ${result.ok ? 'ok' : result.reason}`);
+    expect(azureChatVisionMock).toHaveBeenCalledTimes(2);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.identified.title).toBe('Iron Man');
+      expect(result.identified.confidence).toBe('medium');
     }
   });
 
-  test('poster sarlavhasi o‘qiladigan kadr verify false bo‘lsa nomzod sifatida qoladi', async () => {
+  test('poster sarlavhasi o‘qiladigan kadr verify false bo‘lsa best-effort natija bo‘ladi', async () => {
     const axiosGet = jest.fn(async (url: string) => {
       if (url.includes('/search/movie')) {
         return {
@@ -210,9 +208,64 @@ describe('identifyMovie — consensus ham verifydan o‘tadi', () => {
     const { identifyMovie } = await import('../services/movieService');
     const result = await identifyMovie(Buffer.from('poster').toString('base64'), 'image/jpeg');
 
-    expect(result.ok).toBe(false);
-    if (!result.ok && result.reason === 'llm_verify_failed') {
-      expect(result.candidates[0]?.title).toBe('Parasite');
+    expect(azureChatVisionMock).toHaveBeenCalledTimes(2);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.identified.title).toBe('Parasite');
+      expect(result.identified.confidence).toBe('medium');
+    }
+  });
+
+  test('medium vision nomzod verify false bo‘lsa ham best-effort natija bo‘ladi', async () => {
+    const axiosGet = jest.fn(async () => ({
+      data: {
+        Search: [],
+      },
+    }));
+
+    const azureChatVisionMock = jest
+      .fn()
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          title: 'Reacher',
+          type: 'tv',
+          confidence: 'medium',
+          posterTitleReadable: false,
+          billingName: '',
+        })
+      )
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          match: false,
+          reason: 'single frame is generic',
+        })
+      );
+
+    jest.doMock('axios', () => ({
+      __esModule: true,
+      default: {
+        get: axiosGet,
+      },
+    }));
+
+    jest.doMock('../services/azureLlm', () => ({
+      isAzureLlmConfigured: jest.fn(() => true),
+      azureChatText: jest.fn(),
+      azureChatVision: azureChatVisionMock,
+    }));
+
+    jest.doMock('../services/rekognition', () => ({
+      recognizeCelebrities: jest.fn(async () => []),
+      extractImdbId: jest.fn(async () => null),
+    }));
+
+    const { identifyMovie } = await import('../services/movieService');
+    const result = await identifyMovie(Buffer.from('medium-frame').toString('base64'), 'image/jpeg');
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.identified.title).toBe('Reacher');
+      expect(result.identified.confidence).toBe('medium');
     }
   });
 

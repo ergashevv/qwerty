@@ -67,6 +67,14 @@ const MAX_VERIFY = Math.min(
   8,
   Math.max(1, parseInt(process.env.LLM_MAX_VERIFY || process.env.GEMINI_MAX_VERIFY || '4', 10))
 );
+const IMAGE_ALLOW_BEST_EFFORT_FALLBACK =
+  (process.env.IMAGE_ALLOW_BEST_EFFORT_FALLBACK || 'true').trim().toLowerCase() !== 'false';
+const IMAGE_ACCEPT_ALTERNATIVE_WITHOUT_SECOND_VERIFY =
+  (process.env.IMAGE_ACCEPT_ALTERNATIVE_WITHOUT_SECOND_VERIFY || 'true').trim().toLowerCase() !== 'false';
+const IMAGE_BEST_EFFORT_MIN_CONFIDENCE_RANK = Math.min(
+  3,
+  Math.max(0, parseInt(process.env.IMAGE_BEST_EFFORT_MIN_CONFIDENCE_RANK || '2', 10))
+);
 /** Rasm uzun tomoni (px) — token tejash */
 const AI_IMAGE_MAX_EDGE = Math.min(
   2048,
@@ -100,6 +108,32 @@ function canSurfaceAmbiguousCandidate(candidate: MovieIdentified): boolean {
 function stripAmbiguousFallbackFlag(candidate: MovieIdentified): MovieIdentified {
   const { allowAmbiguousFallback: _allowAmbiguousFallback, ...cleanCandidate } = candidate;
   return cleanCandidate;
+}
+
+function confidenceRank(confidence: string | undefined): number {
+  const value = (confidence || '').toLowerCase();
+  if (value === 'high') return 3;
+  if (value === 'medium') return 2;
+  if (value === 'low') return 0;
+  return 1;
+}
+
+function bestEffortIdentified(candidate: MovieIdentified): MovieIdentified {
+  const clean = stripAmbiguousFallbackFlag(candidate);
+  return {
+    ...clean,
+    confidence: 'medium',
+  };
+}
+
+function canReturnBestEffortCandidate(
+  candidate: MovieIdentified,
+  consensusCandidate: MovieIdentified | null
+): boolean {
+  if (!IMAGE_ALLOW_BEST_EFFORT_FALLBACK) return false;
+  if (!canSurfaceAmbiguousCandidate(candidate)) return false;
+  if (consensusCandidate && titlesMatch(consensusCandidate.title, candidate.title)) return true;
+  return confidenceRank(candidate.confidence) >= IMAGE_BEST_EFFORT_MIN_CONFIDENCE_RANK;
 }
 
 // ─── YORDAMCHI ───────────────────────────────────────────────────────────────
@@ -1426,6 +1460,20 @@ async function identifyMovieOnPreparedImage(
       return { ok: true, identified: stripAmbiguousFallbackFlag(lastAlternative) };
     }
     console.log(`${passLabel} — ⚠️ Alternativ sarlavha ham tasdiqlanmadi:`, lastAlternative.title);
+    if (IMAGE_ACCEPT_ALTERNATIVE_WITHOUT_SECOND_VERIFY) {
+      console.log(`${passLabel} — ✅ Alternativ sarlavha best-effort natija sifatida qabul qilindi:`, lastAlternative.title);
+      return { ok: true, identified: bestEffortIdentified(lastAlternative) };
+    }
+  }
+
+  if (!lastAlternative) {
+    const bestEffort = verifyQueue.find((cand) =>
+      canReturnBestEffortCandidate(cand, consensusCandidate)
+    );
+    if (bestEffort) {
+      console.log(`${passLabel} — ✅ Best-effort natija (verify qattiq rad etdi, lekin signal kuchli):`, bestEffort.title);
+      return { ok: true, identified: bestEffortIdentified(bestEffort) };
+    }
   }
 
   if (!verifyRan) {

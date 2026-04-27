@@ -2,37 +2,53 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import sharpLib from 'sharp';
 import { identifyMovie, titlesMatch, type MovieIdentified } from './movieService';
 
 const YT_DLP = process.env.YT_DLP_PATH || 'yt-dlp';
 const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg';
+const FFPROBE_CANDIDATES = Array.from(
+  new Set(
+    [
+      process.env.FFPROBE_PATH?.trim(),
+      FFMPEG.includes('/') ? path.join(path.dirname(FFMPEG), 'ffprobe') : null,
+      'ffprobe',
+    ].filter((value): value is string => Boolean(value))
+  )
+);
 
 const DOWNLOAD_TIMEOUT_MS = parseInt(process.env.REELS_DOWNLOAD_TIMEOUT_MS || '90000', 10);
 const FFMPEG_TIMEOUT_MS = parseInt(process.env.REELS_FFMPEG_TIMEOUT_MS || '45000', 10);
 const MAX_FILE_MB = parseInt(process.env.REELS_MAX_DOWNLOAD_MB || '80', 10);
+const REELS_MAX_FRAMES = Math.min(
+  12,
+  Math.max(4, parseInt(process.env.REELS_MAX_FRAMES || '8', 10))
+);
 const REELS_MIN_MATCHING_FRAMES = Math.max(
   2,
   parseInt(process.env.REELS_MIN_MATCHING_FRAMES || '2', 10)
 );
 const REELS_ALLOW_SINGLE_HIGH_CONFIDENCE =
   (process.env.REELS_ALLOW_SINGLE_HIGH_CONFIDENCE || 'true').trim().toLowerCase() !== 'false';
+const REELS_ALLOW_SINGLE_MEDIUM_CONFIDENCE =
+  (process.env.REELS_ALLOW_SINGLE_MEDIUM_CONFIDENCE || 'true').trim().toLowerCase() !== 'false';
 
-/** Sekund — qora kadr / titr ehtimolini kamaytirish (default 4 nuqta — sifatni saqlab token tejash) */
-const FRAME_OFFSETS_SEC = (() => {
+/** Sekund — env berilsa aynan shu kadrlar olinadi; bo'lmasa duration bo'yicha dinamik tanlanadi. */
+const FRAME_OFFSETS_SEC_OVERRIDE = (() => {
   const raw = process.env.REELS_FRAME_OFFSETS_SEC?.trim();
-  const fallback = [0.5, 2.0, 4.5, 7.5];
-  if (!raw) return fallback;
+  if (!raw) return null;
   const parts = raw.split(',').map((s) => parseFloat(s.trim())).filter((n) => !Number.isNaN(n) && n >= 0);
-  return parts.length > 0 ? parts : fallback;
+  return parts.length > 0 ? parts.slice(0, REELS_MAX_FRAMES) : null;
 })();
 
 function runProcess(
   command: string,
   args: string[],
   options: { cwd: string; timeoutMs: number }
-): Promise<{ code: number | null; stderr: string }> {
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const errChunks: Buffer[] = [];
+    const outChunks: Buffer[] = [];
     const child = spawn(command, args, {
       cwd: options.cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -44,7 +60,7 @@ function runProcess(
       child.kill('SIGKILL');
       reject(new Error('process_timeout'));
     }, options.timeoutMs);
-    child.stdout?.on('data', () => {});
+    child.stdout?.on('data', (d) => outChunks.push(d));
     child.stderr?.on('data', (d) => errChunks.push(d));
     child.on('error', (e) => {
       if (settled) return;
@@ -58,30 +74,53 @@ function runProcess(
       clearTimeout(timer);
       resolve({
         code,
+        stdout: Buffer.concat(outChunks).toString('utf8'),
         stderr: Buffer.concat(errChunks).toString('utf8'),
       });
     });
   });
 }
 
+function reelsCookiesPath(): string | null {
+  const raw =
+    process.env.REELS_COOKIES_PATH ||
+    process.env.INSTAGRAM_COOKIES_PATH ||
+    process.env.YT_DLP_COOKIES_PATH ||
+    '';
+  const value = raw.trim();
+  if (!value) return null;
+  return fs.existsSync(value) ? value : null;
+}
+
 async function downloadVideo(reelUrl: string, workDir: string): Promise<string> {
   const outTmpl = path.join(workDir, 'src.%(ext)s');
   const args = [
+    '--ignore-config',
+    '--no-warnings',
+    '--geo-bypass',
     '--max-filesize',
     `${MAX_FILE_MB}M`,
     '-f',
-    'best[height<=720]/best',
+    'bv*[height<=720]+ba/b[height<=720]/best[height<=720]/best',
+    '--merge-output-format',
+    'mp4',
     '--no-playlist',
     '--socket-timeout',
     '25',
     '--retries',
-    '2',
+    '4',
     '--fragment-retries',
-    '2',
+    '4',
+    '--user-agent',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
     '-o',
     outTmpl,
     reelUrl,
   ];
+  const cookies = reelsCookiesPath();
+  if (cookies) {
+    args.splice(args.length - 1, 0, '--cookies', cookies);
+  }
   const r = await runProcess(YT_DLP, args, { cwd: workDir, timeoutMs: DOWNLOAD_TIMEOUT_MS });
   if (r.code !== 0) {
     throw new Error(`yt-dlp: ${r.stderr.slice(-400) || 'xato'}`);
@@ -113,6 +152,117 @@ async function extractOneFrame(videoPath: string, workDir: string, offsetSec: nu
   const r = await runProcess(FFMPEG, args, { cwd: workDir, timeoutMs: FFMPEG_TIMEOUT_MS });
   if (r.code !== 0 || !fs.existsSync(out)) return null;
   return out;
+}
+
+async function readVideoDurationSeconds(videoPath: string, workDir: string): Promise<number | null> {
+  for (const ffprobe of FFPROBE_CANDIDATES) {
+    try {
+      const r = await runProcess(
+        ffprobe,
+        [
+          '-v',
+          'error',
+          '-show_entries',
+          'format=duration',
+          '-of',
+          'default=noprint_wrappers=1:nokey=1',
+          videoPath,
+        ],
+        { cwd: workDir, timeoutMs: 12000 }
+      );
+      if (r.code !== 0) continue;
+      const n = parseFloat(r.stdout.trim());
+      if (Number.isFinite(n) && n > 0) return n;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function uniqueFrameOffsets(values: number[], durationSec: number | null): number[] {
+  const maxOffset = durationSec && durationSec > 0.8 ? durationSec - 0.25 : null;
+  const sorted = values
+    .map((n) => Math.max(0.15, maxOffset == null ? n : Math.min(n, maxOffset)))
+    .filter((n) => Number.isFinite(n) && n >= 0)
+    .sort((a, b) => a - b);
+
+  const out: number[] = [];
+  for (const n of sorted) {
+    const prev = out[out.length - 1];
+    if (prev != null && Math.abs(prev - n) < 0.65) continue;
+    out.push(Number(n.toFixed(2)));
+    if (out.length >= REELS_MAX_FRAMES) break;
+  }
+  return out;
+}
+
+function frameOffsetsForDuration(durationSec: number | null): number[] {
+  if (FRAME_OFFSETS_SEC_OVERRIDE) {
+    return uniqueFrameOffsets(FRAME_OFFSETS_SEC_OVERRIDE, durationSec);
+  }
+
+  if (!durationSec) {
+    return [0.5, 1.5, 3, 5, 8, 12, 18, 25].slice(0, REELS_MAX_FRAMES);
+  }
+
+  const anchors = [0.35, 1.1, 2.3, 4.2, 7.0, 11.0, 16.0, 24.0, 34.0];
+  const percentages = [0.12, 0.24, 0.38, 0.54, 0.7, 0.86].map((p) => durationSec * p);
+  return uniqueFrameOffsets([...anchors, ...percentages], durationSec);
+}
+
+async function extractFrames(videoPath: string, workDir: string): Promise<string[]> {
+  const duration = await readVideoDurationSeconds(videoPath, workDir);
+  const offsets = frameOffsetsForDuration(duration);
+  const frames: string[] = [];
+  for (let i = 0; i < offsets.length; i++) {
+    const fp = await extractOneFrame(videoPath, workDir, offsets[i], i);
+    if (fp) frames.push(fp);
+  }
+  return frames;
+}
+
+async function buildContactSheet(framePaths: string[], workDir: string): Promise<string | null> {
+  const selected = framePaths.slice(0, Math.min(6, framePaths.length));
+  if (selected.length < 2) return null;
+
+  try {
+    const thumbW = 360;
+    const thumbH = 640;
+    const columns = Math.min(3, selected.length);
+    const rows = Math.ceil(selected.length / columns);
+    const thumbs = await Promise.all(
+      selected.map((framePath) =>
+        sharpLib(framePath)
+          .resize(thumbW, thumbH, { fit: 'inside', background: '#000000' })
+          .jpeg({ quality: 84, mozjpeg: true })
+          .toBuffer()
+      )
+    );
+    const out = await sharpLib({
+      create: {
+        width: columns * thumbW,
+        height: rows * thumbH,
+        channels: 3,
+        background: '#000000',
+      },
+    })
+      .composite(
+        thumbs.map((input, i) => ({
+          input,
+          left: (i % columns) * thumbW,
+          top: Math.floor(i / columns) * thumbH,
+        }))
+      )
+      .jpeg({ quality: 86, mozjpeg: true })
+      .toBuffer();
+    const outPath = path.join(workDir, 'contact_sheet.jpg');
+    fs.writeFileSync(outPath, out);
+    return outPath;
+  } catch (e) {
+    console.warn('Reels contact sheet xato:', (e as Error).message?.slice(0, 120));
+    return null;
+  }
 }
 
 export interface ReelsIdentifyResult extends Pick<MovieIdentified, 'title' | 'type' | 'confidence'> {
@@ -176,11 +326,19 @@ export function selectReelsConsensus(
   const best = buckets[0];
   if (!best) return null;
   if (best.count >= minMatchingFrames) return best.representative;
+  const bestRank = reelsConfidenceRank(best.representative.confidence);
   if (
     allowSingleHighConfidence &&
-    buckets.length === 1 &&
     best.count === 1 &&
-    reelsConfidenceRank(best.representative.confidence) >= 3
+    bestRank >= 3
+  ) {
+    return best.representative;
+  }
+  if (
+    allowSingleHighConfidence &&
+    REELS_ALLOW_SINGLE_MEDIUM_CONFIDENCE &&
+    best.count === 1 &&
+    bestRank >= 2
   ) {
     return best.representative;
   }
@@ -190,6 +348,47 @@ export function selectReelsConsensus(
 export type ReelsIdentifyOutcome =
   | { ok: true; identified: ReelsIdentifyResult }
   | { ok: false; lastFrameBase64: string | null };
+
+function pushFrameResult(results: ReelsIdentifyResult[], incoming: ReelsIdentifyResult): void {
+  if (!incoming.title.trim()) return;
+  if (
+    results.some(
+      (item) =>
+        item.usedFrameIndex === incoming.usedFrameIndex &&
+        item.type === incoming.type &&
+        titlesMatch(item.title, incoming.title)
+    )
+  ) {
+    return;
+  }
+  results.push(incoming);
+}
+
+function collectIdentifyOutcome(
+  results: ReelsIdentifyResult[],
+  outcome: Awaited<ReturnType<typeof identifyMovie>>,
+  usedFrameIndex: number
+): void {
+  if (outcome.ok) {
+    pushFrameResult(results, {
+      title: outcome.identified.title,
+      type: outcome.identified.type,
+      confidence: outcome.identified.confidence,
+      usedFrameIndex,
+    });
+    return;
+  }
+
+  if (outcome.reason !== 'llm_verify_failed') return;
+  for (const candidate of outcome.candidates.slice(0, 3)) {
+    pushFrameResult(results, {
+      title: candidate.title,
+      type: candidate.type,
+      confidence: candidate.confidence ?? 'medium',
+      usedFrameIndex,
+    });
+  }
+}
 
 /**
  * Videodan ketma-kadrlar bilan identifyMovie — birinchi muvaffaqiyatli natija.
@@ -204,32 +403,54 @@ export async function identifyMovieFromReelVideo(
   const successfulFrames: ReelsIdentifyResult[] = [];
   try {
     const videoPath = await downloadVideo(reelUrl, workDir);
+    const framePaths = await extractFrames(videoPath, workDir);
 
-    for (let i = 0; i < FRAME_OFFSETS_SEC.length; i++) {
-      const off = FRAME_OFFSETS_SEC[i];
-      const fp = await extractOneFrame(videoPath, workDir, off, i);
-      if (!fp) continue;
-      const base64 = fs.readFileSync(fp).toString('base64');
-      lastFrameBase64 = base64;
-      const id = await identifyMovie(base64, 'image/jpeg', textHint?.trim() || null);
-      if (id.ok && id.identified.title) {
-        const frameResult: ReelsIdentifyResult = {
-          title: id.identified.title,
-          type: id.identified.type,
-          confidence: id.identified.confidence,
-          usedFrameIndex: i,
+    if (framePaths.length > 0) {
+      lastFrameBase64 = fs.readFileSync(framePaths[framePaths.length - 1]).toString('base64');
+    }
+
+    const contactSheet = await buildContactSheet(framePaths, workDir);
+    if (contactSheet) {
+      const sheetBase64 = fs.readFileSync(contactSheet).toString('base64');
+      const sheetOutcome = await identifyMovie(sheetBase64, 'image/jpeg', textHint?.trim() || null);
+      if (sheetOutcome.ok) {
+        return {
+          ok: true,
+          identified: {
+            title: sheetOutcome.identified.title,
+            type: sheetOutcome.identified.type,
+            confidence: sheetOutcome.identified.confidence,
+            usedFrameIndex: -1,
+          },
         };
-        successfulFrames.push(frameResult);
-        const consensus = selectReelsConsensus(successfulFrames, {
-          minMatchingFrames: REELS_MIN_MATCHING_FRAMES,
-          allowSingleHighConfidence: false,
-        });
-        if (consensus) {
-          return {
-            ok: true,
-            identified: consensus,
-          };
-        }
+      }
+      collectIdentifyOutcome(successfulFrames, sheetOutcome, -1);
+      const sheetConsensus = selectReelsConsensus(successfulFrames, {
+        minMatchingFrames: REELS_MIN_MATCHING_FRAMES,
+        allowSingleHighConfidence: true,
+      });
+      if (sheetConsensus) {
+        return {
+          ok: true,
+          identified: sheetConsensus,
+        };
+      }
+    }
+
+    for (let i = 0; i < framePaths.length; i++) {
+      const base64 = fs.readFileSync(framePaths[i]).toString('base64');
+      lastFrameBase64 = base64;
+      const frameOutcome = await identifyMovie(base64, 'image/jpeg', textHint?.trim() || null);
+      collectIdentifyOutcome(successfulFrames, frameOutcome, i);
+      const consensus = selectReelsConsensus(successfulFrames, {
+        minMatchingFrames: REELS_MIN_MATCHING_FRAMES,
+        allowSingleHighConfidence: false,
+      });
+      if (consensus) {
+        return {
+          ok: true,
+          identified: consensus,
+        };
       }
     }
 

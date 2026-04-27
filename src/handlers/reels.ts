@@ -6,6 +6,8 @@ import {
   resolveFilmCachePhase,
   makeEmptyLinksSentinel,
   getActorFilmFallbackCandidates,
+  identifyFromTextDetailed,
+  verifyImageMatchesMovie,
   type MediaType,
 } from '../services/movieService';
 import {
@@ -46,6 +48,14 @@ export interface HandleVideoLinkOpts {
   fullText?: string;
 }
 
+const REELS_ALLOW_UNVERIFIED_TEXT_FALLBACK =
+  (process.env.REELS_ALLOW_UNVERIFIED_TEXT_FALLBACK || 'true').trim().toLowerCase() !== 'false';
+
+function canUseUnverifiedReelsTextFallback(identified: { confidence?: string }): boolean {
+  if (!REELS_ALLOW_UNVERIFIED_TEXT_FALLBACK) return false;
+  return (identified.confidence || '').toLowerCase() !== 'low';
+}
+
 async function deliverResolvedReelsResult(
   ctx: Context,
   params: {
@@ -59,7 +69,7 @@ async function deliverResolvedReelsResult(
     writeUrlCache: boolean;
     locale: BotLocale;
     traceBase: Record<string, unknown>;
-    resultSource: 'cache' | 'video';
+    resultSource: 'cache' | 'video' | 'text_fallback';
   }
 ): Promise<void> {
   const {
@@ -286,6 +296,45 @@ export async function handleVideoLink(ctx: Context, videoUrl: string, opts: Hand
     if (!outcome.ok) {
       let failText = c.fail;
       let replyMarkup: { inline_keyboard: { text: string; url: string }[][] } | undefined;
+
+      if (hint && outcome.lastFrameBase64) {
+        await ctx.api.editMessageText(chatId, msgId, u.textHintSearch(hint.slice(0, 50)));
+        const textFallback = await runWithLlmUsageContext(userId, async () => {
+          const textResult = await identifyFromTextDetailed(hint);
+          if (textResult.outcome !== 'found') return null;
+          const verified = await verifyImageMatchesMovie(
+            outcome.lastFrameBase64!,
+            'image/jpeg',
+            textResult.identified.title
+          );
+          if (!verified && !canUseUnverifiedReelsTextFallback(textResult.identified)) return null;
+          return {
+            title: textResult.identified.title,
+            type: textResult.identified.type,
+            confidence: verified ? textResult.identified.confidence ?? 'medium' : 'medium',
+            usedFrameIndex: -2,
+          } satisfies ReelsIdentifyResult;
+        });
+
+        if (textFallback) {
+          await runWithLlmUsageContext(userId, async () =>
+            deliverResolvedReelsResult(ctx, {
+              userId,
+              chatId,
+              processingMsgId: msgId,
+              identified: textFallback,
+              queryForFeedback,
+              urlHash,
+              normalizedUrl,
+              writeUrlCache: true,
+              locale,
+              traceBase,
+              resultSource: 'text_fallback',
+            })
+          );
+          return;
+        }
+      }
 
       if (outcome.lastFrameBase64) {
         const fb = await getActorFilmFallbackCandidates(outcome.lastFrameBase64);

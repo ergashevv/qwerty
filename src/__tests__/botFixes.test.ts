@@ -332,7 +332,22 @@ describe('Photo handler — darhol "Qidirilmoqda..." xabari', () => {
     expect(editMock).not.toHaveBeenCalledWith(1002, 77, '❌ Rasm topilmadi.');
   });
 
-  test('foto topilmasa matn fallback rasm bilan verify bo‘lmasa natija qaytarmaydi', async () => {
+  test('foto topilmasa matn fallback verify bo‘lmasa ham best-effort natija qaytaradi', async () => {
+    const details = {
+      title: 'Iron Man',
+      uzTitle: 'Iron Man',
+      originalTitle: 'Iron Man',
+      year: '2008',
+      rating: '7.9',
+      posterUrl: null,
+      plotUz: 'Test plot',
+      imdbUrl: null,
+      watchLinks: [],
+      tmdbId: 10,
+      imdbId: 'tt0371746',
+      mediaType: 'movie',
+    };
+
     jest.mock('axios', () => ({
       __esModule: true,
       default: {
@@ -357,7 +372,10 @@ describe('Photo handler — darhol "Qidirilmoqda..." xabari', () => {
       verifyImageMatchesMovie: jest.fn(async () => false),
       buildDetailsFromResolved: jest.fn(),
       buildDetailsWithoutTmdb: jest.fn(),
-      resolveFilmCachePhase: jest.fn(),
+      resolveFilmCachePhase: jest.fn(async () => ({
+        phase: 'hit',
+        details,
+      })),
       makeEmptyLinksSentinel: jest.fn(() => '{"empty":true}'),
       extractInstagramSource: jest.fn(async () => null),
       getActorFilmFallbackCandidates: jest.fn(async () => null),
@@ -407,20 +425,20 @@ describe('Photo handler — darhol "Qidirilmoqda..." xabari', () => {
         caption: 'Iron Man',
       },
       reply: jest.fn(async () => ({ message_id: 88 })),
+      replyWithPhoto: jest.fn(async () => ({ message_id: 89 })),
       api: {
         sendChatAction: jest.fn().mockResolvedValue(undefined),
         editMessageText: editMock,
         getFile: jest.fn(async () => ({ file_path: 'photos/test.jpg' })),
+        deleteMessage: jest.fn(async () => {}),
       },
     };
 
     const { handlePhoto } = await import('../handlers/photo');
     await handlePhoto(ctx as never);
 
-    expect(editMock).toHaveBeenCalledWith(
-      1003,
-      88,
-      expect.stringContaining('Bu screenshotdan filmni aniqlay olmadim.'),
+    expect(ctx.reply).toHaveBeenCalledWith(
+      expect.stringContaining('Iron Man'),
       expect.any(Object)
     );
   });
