@@ -304,6 +304,72 @@ function dashboardPage(logoHref: string | null): string {
       transform: translateY(-1px);
     }
 
+    /* Refresh button spin animation */
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+    .spin-icon { display: inline-block; animation: spin 0.8s linear infinite; }
+
+    /* Connection / auto-refresh status bar */
+    .conn-status-bar {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      font-family: var(--font-ui);
+      padding: 5px 12px;
+      border-radius: 99px;
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
+      color: var(--text-muted);
+      transition: border-color 0.3s, color 0.3s;
+      white-space: nowrap;
+    }
+    .conn-status-bar.connected {
+      color: var(--accent);
+      border-color: rgba(45, 212, 191, 0.35);
+    }
+    .conn-status-bar.loading {
+      color: var(--warning);
+      border-color: rgba(245, 158, 11, 0.35);
+    }
+    .conn-status-bar.error {
+      color: var(--error);
+      border-color: rgba(244, 63, 94, 0.35);
+    }
+    .conn-status-bar.paused {
+      color: var(--text-muted);
+      border-color: var(--surface-border);
+    }
+
+    .conn-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      flex-shrink: 0;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1;   transform: scale(1); }
+      50%       { opacity: 0.5; transform: scale(1.3); }
+    }
+    .conn-dot.pulse { animation: pulse-dot 2s ease-in-out infinite; }
+
+    .conn-countdown {
+      font-variant-numeric: tabular-nums;
+      opacity: 0.7;
+      min-width: 2.2ch;
+    }
+
+    .last-refreshed {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      font-family: var(--font-ui);
+      white-space: nowrap;
+    }
+
     /* KPI Cards */
     .kpi-grid {
       display: grid;
@@ -661,6 +727,15 @@ function dashboardPage(logoHref: string | null): string {
         </div>
       </div>
       <div class="header-actions">
+        <div id="connStatusBar" class="conn-status-bar">
+          <span class="conn-dot"></span>
+          <span class="conn-label">Yuklanmoqda…</span>
+          <span class="conn-countdown" style="display:none"></span>
+        </div>
+        <span class="last-refreshed" id="lastRefreshedAt"></span>
+        <button id="btnManualRefresh" class="btn btn-outline" type="button" style="cursor:pointer;border:none">
+          <span>↻</span> Yangilash
+        </button>
         <a href="/dashboard/feedback" class="btn btn-outline">Batafsil tahlil</a>
         <a href="/logout" class="btn btn-outline" style="color:var(--error)">Chiqish</a>
       </div>
