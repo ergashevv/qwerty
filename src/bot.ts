@@ -433,7 +433,7 @@ async function bootstrap(): Promise<void> {
             )
             .catch(() => {});
         }
-        await new Promise((r) => setTimeout(r, 35));
+        await new Promise((r) => setTimeout(r, 55));
       }
 
       await ctx.api
@@ -488,7 +488,7 @@ async function bootstrap(): Promise<void> {
   });
 
   const messagePipeline = new Composer();
-  messagePipeline.use(sequentialize((ctx) => ctx.from?.id?.toString() ?? 'unknown'));
+  messagePipeline.use(sequentialize((ctx) => ctx.from?.id?.toString() ?? ctx.chat?.id?.toString() ?? 'unknown'));
   messagePipeline.on('message:photo', handlePhoto);
   messagePipeline.on('message:document', async (ctx) => {
     const uid = ctx.from?.id;

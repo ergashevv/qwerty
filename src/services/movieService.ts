@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { isAzureLlmConfigured, azureChatText, azureChatVision } from './azureLlm';
+import { isGeminiConfigured, geminiChatText, geminiChatVision } from './geminiClient';
 import sharpLib from 'sharp';
 import { recognizeCelebrities, extractImdbId } from './rekognition';
 import type { BotLocale } from '../i18n/locale';
@@ -58,8 +58,8 @@ export interface WatchLink {
 const TMDB_KEY   = process.env.TMDB_API_KEY   || '';
 const OMDB_KEY   = process.env.OMDB_API_KEY   || '';
 const IMGBB_KEY  = process.env.IMGBB_API_KEY   || '';
-/** Barcha LLM: faqat Azure OpenAI */
-const AI_LLM_ENABLED = isAzureLlmConfigured();
+/** Barcha LLM: Google Gemini */
+const AI_LLM_ENABLED = isGeminiConfigured();
 const KP_KEY     = process.env.KINOPOISK_API_KEY || '';
 const KP_BASE    = 'https://kinopoiskapiunofficial.tech';
 /** Tasdiq bosqichi: har bir nomzod uchun alohida multimodal chaqiruv */
@@ -1045,7 +1045,7 @@ IMPORTANT RULES:
 Respond ONLY with JSON:
 {"title": "Exact title from candidates", "type": "movie" or "tv", "confidence": "high/medium/low"}`;
   try {
-    const text = await azureChatVision('llmPickFromCandidates', base64, 'image/jpeg', userPrompt);
+    const text = await geminiChatVision('llmPickFromCandidates', base64, 'image/jpeg', userPrompt);
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return null;
     const parsed = JSON.parse(m[0]) as { title?: string; type?: string; confidence?: string };
@@ -1062,7 +1062,7 @@ Respond ONLY with JSON:
   } catch { return null; }
 }
 
-// ─── LLM KADR ANALIZI (Azure vision) ─────────────────────────────────────────
+// ─── LLM KADR ANALIZI (Gemini vision) ────────────────────────────────────────
 
 async function identifyByVisionLlm(base64: string, textHint?: string | null): Promise<MovieIdentified | null> {
   if (!AI_LLM_ENABLED) return null;
@@ -1094,7 +1094,7 @@ Rules:
 - Never output an unrelated adult live-action series for a bright family-style animated or illustrated poster.
 - Do NOT guess a title just because it fits the genre — only respond with a title you actually recognize or read from the image.
 - Two films can share a title (e.g. "War Machine" 2017 vs 2026): still output the poster title you read; billingName helps disambiguate.`;
-    const text = await azureChatVision('identifyByVisionLlm', base64, 'image/jpeg', userPrompt);
+    const text = await geminiChatVision('identifyByVisionLlm', base64, 'image/jpeg', userPrompt);
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return null;
     const parsed = JSON.parse(m[0]) as {
@@ -1293,7 +1293,7 @@ Answer ONLY with JSON:
 or
 {"match": false, "reason": "brief explanation", "alternativeTitle": "Exact title or empty string", "alternativeType": "movie or tv or empty string"}`;
   try {
-    const text = await azureChatVision('llmVerifyCandidate', base64, mimeType, userPrompt);
+    const text = await geminiChatVision('llmVerifyCandidate', base64, mimeType, userPrompt);
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return { match: false };
     const parsed = JSON.parse(m[0]) as {
@@ -1501,11 +1501,11 @@ async function identifyMovieOnPreparedImage(
 }
 
 /**
- * Rasm bo'yicha film: Azure OpenAI multimodal LLM + AWS Rekognition / tasdiq.
+ * Rasm bo'yicha film: Gemini multimodal LLM + AWS Rekognition / tasdiq.
  */
 export async function identifyMovie(base64: string, mimeType: string, textHint?: string | null): Promise<IdentifyMovieResult> {
   if (!AI_LLM_ENABLED) {
-    console.warn('identifyMovie: Azure OpenAI sozlanmagan — rasm bo\'yicha aniqlash o\'chirilgan');
+    console.warn('identifyMovie: Gemini sozlanmagan — rasm bo\'yicha aniqlash o\'chirilgan');
     return { ok: false, reason: 'no_candidates' };
   }
 
@@ -1650,7 +1650,7 @@ Official plot: "${tmdbOverview}"
 Does the user's description plausibly match this movie's plot? The user may describe only one scene, character, or aspect — not the full plot.
 Answer ONLY "yes" or "no".`;
   try {
-    const text = (await azureChatText('verifyPlotMatch', plotPrompt))?.trim().toLowerCase();
+    const text = (await geminiChatText('verifyPlotMatch', plotPrompt))?.trim().toLowerCase();
     if (text?.startsWith('no')) {
       console.log(`⚠️ Plot verification failed: user query vs "${movieTitle}"`);
       return false;
@@ -1796,7 +1796,7 @@ Respond ONLY with JSON:
 {"title": "Primary searchable title", "type": "movie" or "tv", "confidence": "high/medium/low"}`;
 
   try {
-    const textResponse = await azureChatText('identifyFromText_llm', llmPrompt);
+    const textResponse = await geminiChatText('identifyFromText_llm', llmPrompt);
     console.log(`🤖 Text identification (LLM): "${query}" -> Response:`, textResponse);
 
     const m = textResponse.match(/\{[\s\S]*?\}/);
@@ -1910,7 +1910,7 @@ Output rules (critical):
 Plot to translate:
 ${text}`;
   try {
-    let out = (await azureChatText('translateToUzbek', tPrompt))?.trim() || text;
+    let out = (await geminiChatText('translateToUzbek', tPrompt))?.trim() || text;
     const parts = out.split(/\n\n+/).filter((p) => {
       const t = p.trim();
       if (!t) return false;
@@ -1953,7 +1953,7 @@ Rules — CRITICAL:
 6. If the film is only known in Uzbekistan under the original English (or Turkish, Korean, etc.) title, output that title unchanged — do NOT invent a "translation".`;
   try {
     const raw =
-      (await azureChatText('translateTitle', titlePrompt))?.trim().replace(/^["']|["']$/g, '') || displayTitle;
+      (await geminiChatText('translateTitle', titlePrompt))?.trim().replace(/^["']|["']$/g, '') || displayTitle;
     // Kirill harflari kelsa — noto'g'ri, displayTitle qaytaramiz
     const hasCyrillic = /[\u0400-\u04ff]/.test(raw);
     const result = hasCyrillic ? displayTitle : raw;
@@ -2611,7 +2611,7 @@ Rules:
 - Return null if you cannot clearly read the username or are not sure`;
   try {
     const compact = await downscaleForInstagramExtract(base64);
-    const text = await azureChatVision('extractInstagramSource', compact, 'image/jpeg', igPrompt, telegramUserId);
+    const text = await geminiChatVision('extractInstagramSource', compact, 'image/jpeg', igPrompt, telegramUserId);
     const m = text.match(/\{[\s\S]*?\}/);
     if (!m) return null;
     const parsed = JSON.parse(m[0]) as { platform?: string | null; account?: string | null };

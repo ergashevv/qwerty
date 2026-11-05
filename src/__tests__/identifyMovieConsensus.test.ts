@@ -97,10 +97,10 @@ describe('identifyMovie — consensus ham verifydan o‘tadi', () => {
       },
     }));
 
-    jest.doMock('../services/azureLlm', () => ({
-      isAzureLlmConfigured: jest.fn(() => true),
-      azureChatText: jest.fn(),
-      azureChatVision: azureChatVisionMock,
+    jest.doMock('../services/geminiClient', () => ({
+      isGeminiConfigured: jest.fn(() => true),
+      geminiChatText: jest.fn(),
+      geminiChatVision: azureChatVisionMock,
     }));
 
     jest.doMock('../services/rekognition', () => ({
@@ -194,10 +194,10 @@ describe('identifyMovie — consensus ham verifydan o‘tadi', () => {
       },
     }));
 
-    jest.doMock('../services/azureLlm', () => ({
-      isAzureLlmConfigured: jest.fn(() => true),
-      azureChatText: jest.fn(),
-      azureChatVision: azureChatVisionMock,
+    jest.doMock('../services/geminiClient', () => ({
+      isGeminiConfigured: jest.fn(() => true),
+      geminiChatText: jest.fn(),
+      geminiChatVision: azureChatVisionMock,
     }));
 
     jest.doMock('../services/rekognition', () => ({
@@ -248,10 +248,10 @@ describe('identifyMovie — consensus ham verifydan o‘tadi', () => {
       },
     }));
 
-    jest.doMock('../services/azureLlm', () => ({
-      isAzureLlmConfigured: jest.fn(() => true),
-      azureChatText: jest.fn(),
-      azureChatVision: azureChatVisionMock,
+    jest.doMock('../services/geminiClient', () => ({
+      isGeminiConfigured: jest.fn(() => true),
+      geminiChatText: jest.fn(),
+      geminiChatVision: azureChatVisionMock,
     }));
 
     jest.doMock('../services/rekognition', () => ({
@@ -335,10 +335,10 @@ describe('identifyMovie — consensus ham verifydan o‘tadi', () => {
       },
     }));
 
-    jest.doMock('../services/azureLlm', () => ({
-      isAzureLlmConfigured: jest.fn(() => true),
-      azureChatText: jest.fn(),
-      azureChatVision: azureChatVisionMock,
+    jest.doMock('../services/geminiClient', () => ({
+      isGeminiConfigured: jest.fn(() => true),
+      geminiChatText: jest.fn(),
+      geminiChatVision: azureChatVisionMock,
     }));
 
     jest.doMock('../services/rekognition', () => ({
@@ -392,10 +392,10 @@ describe('getActorFilmFallbackCandidates — kuchli signal bo‘lsa kandidat qay
       },
     }));
 
-    jest.doMock('../services/azureLlm', () => ({
-      isAzureLlmConfigured: jest.fn(() => true),
-      azureChatText: jest.fn(),
-      azureChatVision: jest.fn(),
+    jest.doMock('../services/geminiClient', () => ({
+      isGeminiConfigured: jest.fn(() => true),
+      geminiChatText: jest.fn(),
+      geminiChatVision: jest.fn(),
     }));
 
     jest.doMock('../services/rekognition', () => ({

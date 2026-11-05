@@ -443,7 +443,7 @@ export async function initPostgresSchema(): Promise<void> {
     ON survey_broadcast_sent (campaign_id, created_at DESC)
   `);
 
-  /** LLM tokenlar (Azure); jadval nomi tarixiy */
+  /** LLM tokenlar (Gemini) */
   await p.query(`
     CREATE TABLE IF NOT EXISTS gemini_usage (
       id BIGSERIAL PRIMARY KEY,

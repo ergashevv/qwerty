@@ -6,7 +6,7 @@
  *   - OMDB
  *   - TMDB
  *   - AWS Rekognition (yuz tanish)
- *   - Azure OpenAI (LLM + vision)
+ *   - Google Gemini (LLM + vision)
  *   - To'liq identifyMovie pipeline
  *
  * Ishlatish: npm run test:integration
@@ -18,7 +18,7 @@ jest.unmock('sharp');
 import 'dotenv/config';
 import axios from 'axios';
 
-// Timeout: haqiqiy API chaqiruvlar + identifyMovie (bir nechta Azure chaqiruv)
+// Timeout: haqiqiy API chaqiruvlar + identifyMovie (bir nechta Gemini chaqiruv)
 jest.setTimeout(120000);
 
 // ─── TEST RASMLARI ────────────────────────────────────────────────────────────
@@ -252,20 +252,16 @@ describe('AWS Rekognition — yuz tanish', () => {
   });
 });
 
-// ─── 4. AZURE OPENAI (to‘g‘ridan — sozlangan bo‘lsa) ─────────────────────────
+// ─── 4. GEMINI (to’g’ridan — sozlangan bo’lsa) ───────────────────────────────
 
-const AZURE_LLM_OK = !!(
-  process.env.AZURE_OPENAI_ENDPOINT?.trim() &&
-  process.env.AZURE_OPENAI_API_KEY?.trim() &&
-  process.env.AZURE_OPENAI_DEPLOYMENT?.trim()
-);
+const AZURE_LLM_OK = !!process.env.GEMINI_API_KEY?.trim();
 
-describe('Azure OpenAI — konfiguratsiya', () => {
-  test('identifyMovie uchun Azure sozlamalari (log)', () => {
+describe(‘Gemini — konfiguratsiya’, () => {
+  test(‘identifyMovie uchun Gemini sozlamalari (log)’, () => {
     if (!AZURE_LLM_OK) {
-      console.log('⚠️ Azure OpenAI .env to‘liq emas — quyidagi identifyMovie testlari avtomatik skip');
+      console.log(‘⚠️ GEMINI_API_KEY .env da yo\’q — quyidagi identifyMovie testlari avtomatik skip’);
     } else {
-      console.log('✅ Azure OpenAI sozlangan');
+      console.log(‘✅ Gemini sozlangan’);
     }
     expect(true).toBe(true);
   });
@@ -276,7 +272,7 @@ describe('Azure OpenAI — konfiguratsiya', () => {
 describe('To\'liq pipeline: identifyMovie — haqiqiy rasm bilan', () => {
   test('Iron Man posteri → identifyMovie → "Iron Man" topilishi kerak', async () => {
     if (!AZURE_LLM_OK) {
-      console.log('Azure yo‘q — identifyMovie o‘tkazib yuborildi');
+      console.log('Gemini yo’q — identifyMovie o’tkazib yuborildi');
       expect(true).toBe(true);
       return;
     }
@@ -303,7 +299,7 @@ describe('To\'liq pipeline: identifyMovie — haqiqiy rasm bilan', () => {
 
   test('Parasite posteri → identifyMovie → "Parasite" topilishi kerak', async () => {
     if (!AZURE_LLM_OK) {
-      console.log('Azure yo‘q — test o‘tkazib yuborildi');
+      console.log('Gemini yo’q — test o’tkazib yuborildi');
       expect(true).toBe(true);
       return;
     }
@@ -356,7 +352,7 @@ describe('Dashboard "eng ko\'p xato" — TMDB poster + identifyMovie (LLM stress
 
   test('Bitta test: yuqoridagi 3 ta serial posteri — identifyMovie ketma-ket (log + ixtiyoriy STRICT)', async () => {
     if (!AZURE_LLM_OK) {
-      console.log('Azure yo‘q — regression o‘tkazib yuborildi');
+      console.log('Gemini yo’q — regression o’tkazib yuborildi');
       expect(true).toBe(true);
       return;
     }

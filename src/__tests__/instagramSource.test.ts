@@ -1,52 +1,50 @@
 /**
- * extractInstagramSource + withAzureSlot parallel testlari (Azure LLM mock).
+ * extractInstagramSource + withGemini parallel testlari (Gemini LLM mock).
  *
- * jest.resetModules() dan keyin mock `azureChatVision` yangi instance bo‘ladi;
+ * jest.resetModules() dan keyin mock `geminiChatVision` yangi instance bo'ladi;
  * movieService ham shu instance ni ishlatishi uchun mockni require ketidan olamiz.
  */
 
-jest.mock('../services/azureLlm', () => {
-  const actual = jest.requireActual<typeof import('../services/azureLlm')>('../services/azureLlm');
+jest.mock('../services/geminiClient', () => {
+  const actual = jest.requireActual<typeof import('../services/geminiClient')>('../services/geminiClient');
   return {
     ...actual,
-    azureChatText: jest.fn(),
-    azureChatVision: jest.fn(),
+    geminiChatText: jest.fn(),
+    geminiChatVision: jest.fn(),
   };
 });
 
 import type * as MovieServiceTypes from '../services/movieService';
 
 let extractInstagramSource: typeof MovieServiceTypes.extractInstagramSource;
-let withAzureSlot: typeof import('../services/azureLlm').withAzureSlot;
-let mockAzureChatVision: jest.MockedFunction<
-  typeof import('../services/azureLlm').azureChatVision
+let withGemini: typeof import('../services/geminiClient').withGemini;
+let mockGeminiChatVision: jest.MockedFunction<
+  typeof import('../services/geminiClient').geminiChatVision
 >;
 
 beforeAll(() => {
-  process.env.AZURE_OPENAI_ENDPOINT = 'https://test.openai.azure.com';
-  process.env.AZURE_OPENAI_API_KEY = 'test_key';
-  process.env.AZURE_OPENAI_DEPLOYMENT = 'test_dep';
+  process.env.GEMINI_API_KEY = 'test_key';
   jest.resetModules();
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const al = require('../services/azureLlm') as typeof import('../services/azureLlm');
-  withAzureSlot = al.withAzureSlot;
-  mockAzureChatVision = al.azureChatVision as typeof mockAzureChatVision;
+  const gc = require('../services/geminiClient') as typeof import('../services/geminiClient');
+  withGemini = gc.withGemini;
+  mockGeminiChatVision = gc.geminiChatVision as typeof mockGeminiChatVision;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   extractInstagramSource = require('../services/movieService').extractInstagramSource;
 });
 
 function mockVisionResponse(jsonText: string) {
-  mockAzureChatVision.mockResolvedValueOnce(jsonText);
+  mockGeminiChatVision.mockResolvedValueOnce(jsonText);
 }
 
 function mockVisionError(err: Error) {
-  mockAzureChatVision.mockRejectedValueOnce(err);
+  mockGeminiChatVision.mockRejectedValueOnce(err);
 }
 
 const DUMMY_BASE64 = Buffer.from('fake-image-data').toString('base64');
 
 describe('extractInstagramSource — to\'g\'ri parse', () => {
-  beforeEach(() => mockAzureChatVision.mockReset());
+  beforeEach(() => mockGeminiChatVision.mockReset());
 
   test('oddiy account nomini ajratib oladi', async () => {
     mockVisionResponse('{"platform": "instagram", "account": "kinolar_720"}');
@@ -75,7 +73,7 @@ describe('extractInstagramSource — to\'g\'ri parse', () => {
 });
 
 describe('extractInstagramSource — Instagram emas holatlari', () => {
-  beforeEach(() => mockAzureChatVision.mockReset());
+  beforeEach(() => mockGeminiChatVision.mockReset());
 
   test('platform null — null qaytaradi (kino kadri)', async () => {
     mockVisionResponse('{"platform": null, "account": null}');
@@ -94,7 +92,7 @@ describe('extractInstagramSource — Instagram emas holatlari', () => {
 });
 
 describe('extractInstagramSource — username validatsiyasi', () => {
-  beforeEach(() => mockAzureChatVision.mockReset());
+  beforeEach(() => mockGeminiChatVision.mockReset());
 
   test('4 ta belgi — juda qisqa (regex: min 5), null qaytaradi', async () => {
     mockVisionResponse('{"platform": "instagram", "account": "kino"}');
@@ -138,7 +136,7 @@ describe('extractInstagramSource — username validatsiyasi', () => {
 });
 
 describe('extractInstagramSource — xatolar yutiladi', () => {
-  beforeEach(() => mockAzureChatVision.mockReset());
+  beforeEach(() => mockGeminiChatVision.mockReset());
 
   test('LLM network xatosi — null qaytaradi, crash yo\'q', async () => {
     mockVisionError(new Error('Network error'));
@@ -156,16 +154,16 @@ describe('extractInstagramSource — xatolar yutiladi', () => {
   });
 });
 
-describe('withAzureSlot — parallel slot xavfsizligi', () => {
+describe('withGemini — parallel slot xavfsizligi', () => {
   test('10 ta parallel call — hech biri slot limitidan o\'tmaydi', async () => {
     let maxActive = 0;
     let currentActive = 0;
     const MAX = 10;
-    const prev = process.env.AZURE_OPENAI_MAX_CONCURRENT;
-    process.env.AZURE_OPENAI_MAX_CONCURRENT = String(MAX);
+    const prev = process.env.GEMINI_MAX_CONCURRENT;
+    process.env.GEMINI_MAX_CONCURRENT = String(MAX);
 
     const trackingCall = () =>
-      withAzureSlot(async () => {
+      withGemini(async () => {
         currentActive++;
         maxActive = Math.max(maxActive, currentActive);
         expect(currentActive).toBeLessThanOrEqual(MAX);
@@ -178,18 +176,18 @@ describe('withAzureSlot — parallel slot xavfsizligi', () => {
     expect(maxActive).toBeGreaterThan(0);
     expect(maxActive).toBeLessThanOrEqual(MAX);
 
-    if (prev === undefined) delete process.env.AZURE_OPENAI_MAX_CONCURRENT;
-    else process.env.AZURE_OPENAI_MAX_CONCURRENT = prev;
+    if (prev === undefined) delete process.env.GEMINI_MAX_CONCURRENT;
+    else process.env.GEMINI_MAX_CONCURRENT = prev;
   });
 
   test('extractInstagramSource + parallel calllar — slot conflict yo\'q', async () => {
-    mockAzureChatVision.mockReset();
+    mockGeminiChatVision.mockReset();
     mockVisionResponse('{"platform": "instagram", "account": "kinolar_720"}');
 
     let errorOccurred = false;
 
     const mainCalls = Array.from({ length: 5 }, () =>
-      withAzureSlot(async () => {
+      withGemini(async () => {
         await new Promise((r) => setTimeout(r, 10));
         return 'main-result';
       }).catch(() => {
@@ -208,8 +206,8 @@ describe('withAzureSlot — parallel slot xavfsizligi', () => {
 
 describe('fire-and-forget pattern — xato yutiladi', () => {
   test('void extractInstagramSource xato bersa ham caller crash bo\'lmaydi', async () => {
-    mockAzureChatVision.mockReset();
-    mockVisionError(new Error('Azure down'));
+    mockGeminiChatVision.mockReset();
+    mockVisionError(new Error('Gemini down'));
 
     let callerError: unknown = null;
     try {

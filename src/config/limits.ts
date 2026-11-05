@@ -27,7 +27,7 @@ export const REELS_LIMIT_PER_WINDOW = parseInt(process.env.REELS_LIMIT_PER_WINDO
  * Env: UNLIMITED_TELEGRAM_IDS=123,456
  */
 function parseUnlimitedIds(): Set<number> {
-  const raw = process.env.UNLIMITED_TELEGRAM_IDS ?? '5737309471';
+  const raw = process.env.UNLIMITED_TELEGRAM_IDS ?? '';
   const ids = raw
     .split(',')
     .map((s) => parseInt(s.trim(), 10))
